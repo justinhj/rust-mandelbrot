@@ -14,7 +14,6 @@ fn main() {
     let args = env::args().collect::<Vec<String>>();
 
     let num_cpus = num_cpus::get();
-    println!("Found {:?} cpus.", num_cpus);
 
     if args.len() < 5 {
         eprintln!(
@@ -42,17 +41,11 @@ fn main() {
 
     assert!(num_threads > 0);
 
-    // println!("{}Red", color::Fg(color::Red));
-    // println!("{}Blue", color::Fg(color::Blue));
-    // println!("{}Blue'n'Bold{}", style::Bold, style::Reset);
-    // println!("{}Just plain italic", style::Italic);
-    // print!("{}Stuff", termion::cursor::Goto(1, 1));
-
     parallel_render(&mut pixels, bounds, upper_left, lower_right, num_threads);
 
     tui_loop(&mut pixels, bounds, upper_left, lower_right);
 
-    //     write_image(&args[1], &pixels, bounds).expect("error writing PNG file");
+    write_image(&args[1], &pixels, bounds).expect("error writing PNG file");
 }
 
 /// Draw the pixels of the Mandelbrot set as best we can in the terminal
@@ -62,9 +55,9 @@ fn render_to_terminal(
     bounds: (usize, usize),
     upper_left: Complex<f64>,
     lower_right: Complex<f64>,
+    terminal_size: (u16,u16)
 ) {
-    let (cols, rows) = termion::terminal_size().unwrap();
-    const gray_shades: f32 = 24.0;
+    let (cols, rows) = terminal_size;
 
     for c in 1..cols {
         for r in 1..rows {
@@ -89,7 +82,12 @@ fn tui_loop(
     let stdin = stdin();
     let mut stdout = MouseTerminal::from(stdout().into_raw_mode().unwrap());
 
-    let ts = termion::terminal_size().unwrap();
+    let mut ts = termion::terminal_size().unwrap();
+
+    // Temp for debugging in IntelliJ the terminal has zero size
+    if(ts.0 == 0) {
+        ts = (120,80);
+    }
 
     write!(
         stdout,
@@ -99,7 +97,7 @@ fn tui_loop(
     )
     .unwrap();
 
-    render_to_terminal(&pixels, bounds, upper_left, lower_right);
+    render_to_terminal(&pixels, bounds, upper_left, lower_right, ts);
 
     stdout.flush().unwrap();
 
@@ -175,18 +173,18 @@ fn escape_time(c: Complex<f64>, limit: usize) -> Option<usize> {
 /// Given a rendered Mandelbrot image of the size bounds calculate the value of the terminal
 /// representation. Given the terminal width and height and a character position, you must find
 /// the average brightness of the pixels that character represents. Note that there are 24
-/// gray scales.
+/// gray scales. char_pos is 1 based
 fn pixel_to_char_grayscale(
     char_pos: (u16, u16),
     terminal_bounds: (u16, u16),
     pixels: &Vec<u8>,
     bounds: (usize, usize),
 ) -> u8 {
-    let horizontal_pixels_per_char = terminal_bounds.0 as f32 / bounds.0 as f32;
-    let vertical_pixels_per_char = terminal_bounds.1 as f32 / bounds.1 as f32;
+    let horizontal_pixels_per_char = bounds.0 as f32 / terminal_bounds.0 as f32;
+    let vertical_pixels_per_char = bounds.1 as f32 / terminal_bounds.1 as f32;
 
-    let leftmost_pixel = char_pos.0 as f32 * horizontal_pixels_per_char;
-    let topmost_pixel = char_pos.1 as f32 * vertical_pixels_per_char;
+    let leftmost_pixel = (char_pos.0 - 1) as f32 * horizontal_pixels_per_char;
+    let topmost_pixel = (char_pos.1 - 1) as f32 * vertical_pixels_per_char;
 
     let rightmost_pixel = (leftmost_pixel + horizontal_pixels_per_char) as usize;
     let bottommost_pixel = (topmost_pixel + vertical_pixels_per_char) as usize;
@@ -195,12 +193,14 @@ fn pixel_to_char_grayscale(
     let mut count: usize = 0;
     for x in leftmost_pixel as usize..rightmost_pixel {
         for y in topmost_pixel as usize..bottommost_pixel {
-            sum += pixels[x + y * bounds.1] as usize;
+            sum += pixels[x + y * bounds.0] as usize;
             count += 1;
         }
     }
 
-    let ret = ((sum as f32 / count as f32) * (24.0 / 256.0)) as u8;
+    let avg = sum as f32 / count as f32;
+    let gray_scale: f32 = 24.0 / 256.0;
+    let ret = (avg * gray_scale) as u8;
     // println!("{:?} {:?} {:?}", sum, count, ret);
     return ret
 }
