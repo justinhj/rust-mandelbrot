@@ -3,7 +3,12 @@ use image::ColorType;
 use num::Complex;
 use std::env;
 use std::fs::File;
+use std::io::{stdin, stdout, Write};
 use std::str::FromStr;
+use termion::event::{Event, Key, MouseEvent};
+use termion::input::{MouseTerminal, TermRead};
+use termion::raw::IntoRawMode;
+use termion::{color, style};
 
 fn main() {
     let args = env::args().collect::<Vec<String>>();
@@ -12,9 +17,12 @@ fn main() {
     println!("Found {:?} cpus.", num_cpus);
 
     if args.len() < 5 {
-        eprintln!("Usage: {} FILE PIXELS UPPERLEFT UPPERRIGHT [THREADS]", args[0]);
         eprintln!(
-            "Example: {} mandel.png 1000x750 -1.20,0.35 -1,0.20 8",
+            "Usage: {} FILE PIXELS UPPERLEFT UPPERRIGHT [THREADS]",
+            args[0]
+        );
+        eprintln!(
+            "Example: {} mandel.png 1280x768 -1.20,0.35 -1,0.20 8",
             args[0]
         );
         std::process::exit(1);
@@ -27,16 +35,88 @@ fn main() {
 
     // Handle thread input
     let num_threads: usize = if args.len() == 6 {
-           args[5].parse().unwrap() 
-        } else {
-            num_cpus
-        };
+        args[5].parse().unwrap()
+    } else {
+        num_cpus
+    };
 
     assert!(num_threads > 0);
 
+    // println!("{}Red", color::Fg(color::Red));
+    // println!("{}Blue", color::Fg(color::Blue));
+    // println!("{}Blue'n'Bold{}", style::Bold, style::Reset);
+    // println!("{}Just plain italic", style::Italic);
+    // print!("{}Stuff", termion::cursor::Goto(1, 1));
+
     parallel_render(&mut pixels, bounds, upper_left, lower_right, num_threads);
 
-    write_image(&args[1], &pixels, bounds).expect("error writing PNG file");
+    tui_loop(&mut pixels, bounds, upper_left, lower_right);
+
+    //     write_image(&args[1], &pixels, bounds).expect("error writing PNG file");
+}
+
+/// Draw the pixels of the Mandelbrot set as best we can in the terminal
+/// https://www.unicode.org/charts/PDF/U2580.pdf
+fn render_to_terminal(
+    pixels: &Vec<u8>,
+    bounds: (usize, usize),
+    upper_left: Complex<f64>,
+    lower_right: Complex<f64>,
+) {
+    let (cols, rows) = termion::terminal_size().unwrap();
+    const gray_shades: f32 = 24.0;
+
+    for c in 1..cols {
+        for r in 1..rows {
+            let pixel = pixel_to_char_grayscale((c,r), (cols,rows), pixels, bounds);
+
+            println!(
+                "{}{}\u{2588}",
+                termion::cursor::Goto(c, r),
+                termion::color::Fg(termion::color::AnsiValue::grayscale(pixel))
+            );
+        }
+    }
+}
+
+/// Render to the terminal
+fn tui_loop(
+    pixels: &mut Vec<u8>,
+    bounds: (usize, usize),
+    upper_left: Complex<f64>,
+    lower_right: Complex<f64>,
+) {
+    let stdin = stdin();
+    let mut stdout = MouseTerminal::from(stdout().into_raw_mode().unwrap());
+
+    let ts = termion::terminal_size().unwrap();
+
+    write!(
+        stdout,
+        "{}{}q to exit. Click, click, click!",
+        termion::clear::All,
+        termion::cursor::Goto(1, 1)
+    )
+    .unwrap();
+
+    render_to_terminal(&pixels, bounds, upper_left, lower_right);
+
+    stdout.flush().unwrap();
+
+    for c in stdin.events() {
+        let evt = c.unwrap();
+        match evt {
+            Event::Key(Key::Char('q')) => break,
+            Event::Mouse(me) => match me {
+                MouseEvent::Press(_, x, y) => {
+                    write!(stdout, "{}x", termion::cursor::Goto(x, y)).unwrap();
+                }
+                _ => (),
+            },
+            _ => {}
+        }
+        stdout.flush().unwrap();
+    }
 }
 
 /// Given a pixel array, bounds and window co-ordinates and number of threads to use
@@ -46,8 +126,8 @@ fn parallel_render(
     bounds: (usize, usize),
     upper_left: Complex<f64>,
     lower_right: Complex<f64>,
-    num_threads: usize) {
-
+    num_threads: usize,
+) {
     println!("Parallel render with {:?} threads", num_threads);
 
     let rows_per_band = bounds.1 / num_threads + 1;
@@ -65,7 +145,8 @@ fn parallel_render(
                 render(band, band_bounds, band_upper_left, band_lower_right);
             });
         }
-    }).unwrap();
+    })
+    .unwrap();
 }
 
 /// Try to determine if `c` is in the Mandelbrot set, using at most `limit`
@@ -88,6 +169,43 @@ fn escape_time(c: Complex<f64>, limit: usize) -> Option<usize> {
     None
 }
 
+// eg 1000 pixels to 100 chars
+// pixels per char = pixel w / char w ... round down
+
+/// Given a rendered Mandelbrot image of the size bounds calculate the value of the terminal
+/// representation. Given the terminal width and height and a character position, you must find
+/// the average brightness of the pixels that character represents. Note that there are 24
+/// gray scales.
+fn pixel_to_char_grayscale(
+    char_pos: (u16, u16),
+    terminal_bounds: (u16, u16),
+    pixels: &Vec<u8>,
+    bounds: (usize, usize),
+) -> u8 {
+    let horizontal_pixels_per_char = terminal_bounds.0 as f32 / bounds.0 as f32;
+    let vertical_pixels_per_char = terminal_bounds.1 as f32 / bounds.1 as f32;
+
+    let leftmost_pixel = char_pos.0 as f32 * horizontal_pixels_per_char;
+    let topmost_pixel = char_pos.1 as f32 * vertical_pixels_per_char;
+
+    let rightmost_pixel = (leftmost_pixel + horizontal_pixels_per_char) as usize;
+    let bottommost_pixel = (topmost_pixel + vertical_pixels_per_char) as usize;
+
+    let mut sum: usize = 0;
+    let mut count: usize = 0;
+    for x in leftmost_pixel as usize..rightmost_pixel {
+        for y in topmost_pixel as usize..bottommost_pixel {
+            sum += pixels[x + y * bounds.1] as usize;
+            count += 1;
+        }
+    }
+
+    let ret = ((sum as f32 / count as f32) * (24.0 / 256.0)) as u8;
+    // println!("{:?} {:?} {:?}", sum, count, ret);
+    return ret
+}
+
+/// Calculate the Complex number that represents the pixel within an image of the defined bounds
 fn pixel_to_point(
     bounds: (usize, usize),
     pixel: (usize, usize),
