@@ -16,12 +16,13 @@ fn main() {
     let num_cpus = num_cpus::get();
 
     if args.len() < 5 {
+
         eprintln!(
             "Usage: {} FILE PIXELS UPPERLEFT UPPERRIGHT [THREADS]",
             args[0]
         );
         eprintln!(
-            "Example: {} mandel.png 1280x768 -1.20,0.35 -1,0.20 8",
+            "Example: {} mandel.png 2560x1440 -1.20,1.0 1.20,-1.0 4",
             args[0]
         );
         std::process::exit(1);
@@ -55,7 +56,8 @@ fn render_to_terminal(
     bounds: (usize, usize),
     upper_left: Complex<f64>,
     lower_right: Complex<f64>,
-    terminal_size: (u16,u16)
+    terminal_size: (u16,u16),
+    terminal_window_offset: (u16,u16)
 ) {
     let (cols, rows) = terminal_size;
 
@@ -65,11 +67,16 @@ fn render_to_terminal(
 
             println!(
                 "{}{}\u{2588}",
-                termion::cursor::Goto(c, r),
+                termion::cursor::Goto(c + terminal_window_offset.0, r + terminal_window_offset.1),
                 termion::color::Fg(termion::color::AnsiValue::grayscale(pixel))
             );
         }
     }
+}
+
+struct Rect {
+    upper_left: Complex<f64>,
+    lower_right: Complex<f64>
 }
 
 /// Render to the terminal
@@ -79,38 +86,59 @@ fn tui_loop(
     upper_left: Complex<f64>,
     lower_right: Complex<f64>,
 ) {
+
+    // 10   100
+    //             100 200
+    //  width = 100 - 10 = 90
+    //  sel up left = 10 + 90/4  
+    //  sel up right = 100 - 90/4
+    //
+
+    let zoom = 0.5f64;
+//    let mut selection: Rect; 
+
     let stdin = stdin();
     let mut stdout = MouseTerminal::from(stdout().into_raw_mode().unwrap());
 
     let mut ts = termion::terminal_size().unwrap();
 
     // Temp for debugging in IntelliJ the terminal has zero size
-    if(ts.0 == 0) {
+    if ts.0 == 0 {
         ts = (120,80);
     }
 
     write!(
         stdout,
-        "{}{}q to exit. Click, click, click!",
+        "{}{}Esc to exit - wasd to move selection - qz adjust zoom - space to write image",
         termion::clear::All,
         termion::cursor::Goto(1, 1)
     )
     .unwrap();
 
-    render_to_terminal(&pixels, bounds, upper_left, lower_right, ts);
-
+    render_to_terminal(&pixels, bounds, upper_left, lower_right, (ts.0, ts.1 - 1), (0,1));
     stdout.flush().unwrap();
 
     for c in stdin.events() {
         let evt = c.unwrap();
         match evt {
-            Event::Key(Key::Char('q')) => break,
-            Event::Mouse(me) => match me {
-                MouseEvent::Press(_, x, y) => {
-                    write!(stdout, "{}x", termion::cursor::Goto(x, y)).unwrap();
+            Event::Key(key) => {
+                match key {
+                    Key::Esc => {
+                        println!("{}", termion::clear::All);
+                        break
+                    },
+                    Key::Char('q') => {
+                        render_to_terminal(&pixels, bounds, upper_left, lower_right, (ts.0, ts.1 - 1), (0,1));
+                    },
+                    _ => {}
                 }
-                _ => (),
             },
+            // Event::Mouse(me) => match me {
+            //     MouseEvent::Press(_, x, y) => {
+            //         write!(stdout, "{}x", termion::cursor::Goto(x, y)).unwrap();
+            //     }
+            //     _ => (),
+            // },
             _ => {}
         }
         stdout.flush().unwrap();
