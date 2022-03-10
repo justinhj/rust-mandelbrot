@@ -9,6 +9,23 @@ use termion::event::{Event, Key, MouseEvent};
 use termion::input::{MouseTerminal, TermRead};
 use termion::raw::IntoRawMode;
 use termion::{color, style};
+use std::cmp;
+
+#[derive(Debug)]
+struct Rect {
+    upper_left: Complex<f64>,
+    lower_right: Complex<f64>,
+}
+impl PartialEq for Rect {
+    fn eq(&self, other: &Self) -> bool {
+        float_cmp::approx_eq!(f64, self.upper_left.re, other.upper_left.re, ulps = 3) &&
+        float_cmp::approx_eq!(f64, self.upper_left.im, other.upper_left.im, ulps = 3) &&
+        float_cmp::approx_eq!(f64, self.lower_right.re, other.lower_right.re, ulps = 3) &&
+        float_cmp::approx_eq!(f64, self.lower_right.im, other.lower_right.im, ulps = 3)
+    }
+}
+impl Eq for Rect {
+}
 
 fn main() {
     let args = env::args().collect::<Vec<String>>();
@@ -16,7 +33,6 @@ fn main() {
     let num_cpus = num_cpus::get();
 
     if args.len() < 5 {
-
         eprintln!(
             "Usage: {} FILE PIXELS UPPERLEFT UPPERRIGHT [THREADS]",
             args[0]
@@ -31,6 +47,12 @@ fn main() {
     let bounds = parse_pair(&args[2], 'x').expect("error parsing image dimensions");
     let upper_left = parse_complex(&args[3]).expect("error parsing upper left corner point");
     let lower_right = parse_complex(&args[4]).expect("error parsing lower right corner point");
+
+    let window = Rect {
+        upper_left,
+        lower_right,
+    };
+
     let mut pixels = vec![0; bounds.0 * bounds.1];
 
     // Handle thread input
@@ -44,26 +66,46 @@ fn main() {
 
     parallel_render(&mut pixels, bounds, upper_left, lower_right, num_threads);
 
-    tui_loop(&mut pixels, bounds, upper_left, lower_right);
+    tui_loop(&mut pixels, bounds, &window);
 
     write_image(&args[1], &pixels, bounds).expect("error writing PNG file");
 }
 
+/// Given bounds in cursor space and a Complex number return the cursor position (col,row)
+fn complex_to_cursor_position(
+    complex: &Complex<f64>,
+    window: &Rect,
+    terminal_bounds: (u16, u16),
+) -> (u16, u16) {
+
+    // Calculate how much complex number is represented by one cursor position for rows and columns
+    let complex_x_per_char = num::abs(window.lower_right.re - window.upper_left.re) / terminal_bounds.0 as f64;
+    let complex_y_per_char = num::abs(window.upper_left.im - window.lower_right.im) / terminal_bounds.1 as f64;
+
+    let c: f64 = num::abs(complex.re - window.upper_left.re) / complex_x_per_char;
+    let r: f64 = num::abs(window.lower_right.im - complex.im) / complex_y_per_char;
+
+    (c as u16, terminal_bounds.1 - (r as u16))
+}
+
 /// Draw the pixels of the Mandelbrot set as best we can in the terminal
 /// https://www.unicode.org/charts/PDF/U2580.pdf
-fn render_to_terminal(
+/// Window is the complex coordinates of the window into the Mandelbrot set
+/// Selection is the current user selection for the next zoom
+fn terminal_render(
     pixels: &Vec<u8>,
     bounds: (usize, usize),
-    upper_left: Complex<f64>,
-    lower_right: Complex<f64>,
-    terminal_size: (u16,u16),
-    terminal_window_offset: (u16,u16)
+    window: &Rect,
+    selection: &Rect,
+    terminal_size: (u16, u16),
+    terminal_window_offset: (u16, u16),
 ) {
     let (cols, rows) = terminal_size;
 
+    // Draw the pixels
     for c in 1..cols {
         for r in 1..rows {
-            let pixel = pixel_to_char_grayscale((c,r), (cols,rows), pixels, bounds);
+            let pixel = pixel_to_char_grayscale((c, r), (cols, rows), pixels, bounds);
 
             println!(
                 "{}{}\u{2588}",
@@ -72,30 +114,67 @@ fn render_to_terminal(
             );
         }
     }
+
+    // Draw the zoom selection
+    let (start_c,start_r) =  complex_to_cursor_position(&selection.upper_left,
+        window,
+        terminal_size);
+
+    let (end_c,end_r) =  complex_to_cursor_position(&selection.lower_right,
+        window,
+        terminal_size);
+
+    let selection_colour = color::AnsiValue::grayscale(20);
+
+    // Top and bottom
+    for c in start_c..end_c {
+        println!(
+            "{}{}\u{2588}",
+            termion::cursor::Goto(c,end_r),
+            termion::color::Fg(selection_colour)
+        );
+        println!(
+            "{}{}\u{2588}",
+            termion::cursor::Goto(c,start_r),
+            termion::color::Fg(selection_colour)
+        );
+    }
+
+    // Sides
+    for r in start_r..end_r {
+        println!(
+            "{}{}\u{2588}",
+            termion::cursor::Goto(start_c,r),
+            termion::color::Fg(selection_colour)
+        );
+        println!(
+            "{}{}\u{2588}",
+            termion::cursor::Goto(end_c,r),
+            termion::color::Fg(selection_colour)
+        );
+    }
 }
 
-struct Rect {
-    upper_left: Complex<f64>,
-    lower_right: Complex<f64>
+fn selection_from_window(window: &Rect, zoom: f64) -> Rect {
+    // TODO use zoom
+    let quarter_width = num::abs(window.lower_right.re - window.upper_left.re) / 4.0;
+    let quarter_height = num::abs(window.upper_left.im - window.lower_right.im) / 4.0;
+    return Rect {
+        upper_left: Complex {
+            re: window.upper_left.re + quarter_width,
+            im: window.upper_left.im - quarter_height,
+        },
+        lower_right: Complex {
+            re: window.lower_right.re - quarter_width,
+            im: window.lower_right.im + quarter_height,
+        },
+    };
 }
 
 /// Render to the terminal
-fn tui_loop(
-    pixels: &mut Vec<u8>,
-    bounds: (usize, usize),
-    upper_left: Complex<f64>,
-    lower_right: Complex<f64>,
-) {
-
-    // 10   100
-    //             100 200
-    //  width = 100 - 10 = 90
-    //  sel up left = 10 + 90/4  
-    //  sel up right = 100 - 90/4
-    //
-
+fn tui_loop(pixels: &mut Vec<u8>, bounds: (usize, usize), window: &Rect) {
     let zoom = 0.5f64;
-//    let mut selection: Rect; 
+    let selection = selection_from_window(&window, zoom);
 
     let stdin = stdin();
     let mut stdout = MouseTerminal::from(stdout().into_raw_mode().unwrap());
@@ -104,7 +183,7 @@ fn tui_loop(
 
     // Temp for debugging in IntelliJ the terminal has zero size
     if ts.0 == 0 {
-        ts = (120,80);
+        ts = (120, 80);
     }
 
     write!(
@@ -115,23 +194,35 @@ fn tui_loop(
     )
     .unwrap();
 
-    render_to_terminal(&pixels, bounds, upper_left, lower_right, (ts.0, ts.1 - 1), (0,1));
+    terminal_render(
+        &pixels,
+        bounds,
+        &window,
+        &selection,
+        (ts.0, ts.1 - 1),
+        (0, 1),
+    );
     stdout.flush().unwrap();
 
     for c in stdin.events() {
         let evt = c.unwrap();
         match evt {
-            Event::Key(key) => {
-                match key {
-                    Key::Esc => {
-                        println!("{}", termion::clear::All);
-                        break
-                    },
-                    Key::Char('q') => {
-                        render_to_terminal(&pixels, bounds, upper_left, lower_right, (ts.0, ts.1 - 1), (0,1));
-                    },
-                    _ => {}
+            Event::Key(key) => match key {
+                Key::Esc => {
+                    println!("{}", termion::clear::All);
+                    break;
                 }
+                Key::Char('q') => {
+                    terminal_render(
+                        &pixels,
+                        bounds,
+                        &window,
+                        &selection,
+                        (ts.0, ts.1 - 1),
+                        (0, 1),
+                    );
+                }
+                _ => {}
             },
             // Event::Mouse(me) => match me {
             //     MouseEvent::Press(_, x, y) => {
@@ -229,8 +320,7 @@ fn pixel_to_char_grayscale(
     let avg = sum as f32 / count as f32;
     let gray_scale: f32 = 24.0 / 256.0;
     let ret = (avg * gray_scale) as u8;
-    // println!("{:?} {:?} {:?}", sum, count, ret);
-    return ret
+    return ret;
 }
 
 /// Calculate the Complex number that represents the pixel within an image of the defined bounds
@@ -246,8 +336,7 @@ fn pixel_to_point(
     );
     Complex {
         re: upper_left.re + pixel.0 as f64 * width / bounds.0 as f64,
-        im: upper_left.im - pixel.1 as f64 * height / bounds.1 as f64, // Why subtraction here? pixel.1 increases as we go down,
-                                                                       // but the imaginary component increases as we go up.
+        im: upper_left.im - pixel.1 as f64 * height / bounds.1 as f64,
     }
 }
 
@@ -334,4 +423,38 @@ fn test_pixel_to_point() {
             im: -0.75
         }
     );
+}
+
+#[test]
+fn test_complex_to_cursor_position() {
+    let window = Rect {
+        upper_left: Complex {
+            re: 0.0,
+            im: 100.0,
+        },
+        lower_right: Complex {
+            re: 100.0,
+            im: 0.0,
+        }
+    };
+    let selection = selection_from_window(&window, 1.0);
+    assert_eq!(
+        selection,
+         Rect {
+            upper_left: Complex {
+                re: 25.0,
+                im: 75.0,
+            },
+            lower_right: Complex {
+                re: 75.0,
+                im: 25.0,
+            }
+        }
+    );
+   
+    let terminal_size = (200,200);
+    let (r,c) =  complex_to_cursor_position(&selection.upper_left,
+        &window,
+        terminal_size);
+    assert_eq!((r,c), (50,50));
 }
