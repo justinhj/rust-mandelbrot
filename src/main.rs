@@ -6,12 +6,12 @@ use std::env;
 use std::fs::File;
 use std::io::{stdin, stdout, Write};
 use std::str::FromStr;
+use termion::color;
 use termion::event::{Event, Key}; // , MouseEvent};
 use termion::input::{MouseTerminal, TermRead};
 use termion::raw::IntoRawMode;
-use termion::color;
 
-#[derive(Debug,Clone)]
+#[derive(Debug, Clone)]
 struct Rect {
     upper_left: Complex<f64>,
     lower_right: Complex<f64>,
@@ -37,7 +37,7 @@ fn main() {
             args[0]
         );
         eprintln!(
-            "Example: {} mandel.png 2560x1440 -1.20,1.0 1.20,-1.0 4",
+            "Example: {} ./images/mandel.png 2560x1440 -1.20,1.0 1.20,-1.0 4",
             args[0]
         );
         std::process::exit(1);
@@ -84,12 +84,24 @@ fn move_selection_left(
     let complex_x_per_char =
         num::abs(window.lower_right.re - window.upper_left.re) / terminal_bounds.0 as f64;
 
-    let upper_left_re = f64::max(selection.upper_left.re - (count as f64 * complex_x_per_char), window.upper_left.re); 
-    let lower_right_re = f64::max(selection.lower_right.re - (count as f64 * complex_x_per_char), window.upper_left.re); 
+    let upper_left_re = f64::max(
+        selection.upper_left.re - (count as f64 * complex_x_per_char),
+        window.upper_left.re,
+    );
+    let lower_right_re = f64::max(
+        selection.lower_right.re - (count as f64 * complex_x_per_char),
+        window.upper_left.re,
+    );
 
     Rect {
-        upper_left: Complex { re: upper_left_re, im: selection.upper_left.im },
-        lower_right: Complex { re: lower_right_re, im: selection.lower_right.im },
+        upper_left: Complex {
+            re: upper_left_re,
+            im: selection.upper_left.im,
+        },
+        lower_right: Complex {
+            re: lower_right_re,
+            im: selection.lower_right.im,
+        },
     }
 }
 
@@ -101,12 +113,24 @@ fn move_selection_right(
 ) -> Rect {
     let complex_x_per_char =
         num::abs(window.lower_right.re - window.upper_left.re) / terminal_bounds.0 as f64;
-    let upper_left_re = f64::min(selection.upper_left.re + (count as f64 * complex_x_per_char), window.lower_right.re); 
-    let lower_right_re = f64::min(selection.lower_right.re + (count as f64 * complex_x_per_char), window.lower_right.re); 
+    let upper_left_re = f64::min(
+        selection.upper_left.re + (count as f64 * complex_x_per_char),
+        window.lower_right.re,
+    );
+    let lower_right_re = f64::min(
+        selection.lower_right.re + (count as f64 * complex_x_per_char),
+        window.lower_right.re,
+    );
 
     Rect {
-        upper_left: Complex { re: upper_left_re, im: selection.upper_left.im },
-        lower_right: Complex { re: lower_right_re, im: selection.lower_right.im },
+        upper_left: Complex {
+            re: upper_left_re,
+            im: selection.upper_left.im,
+        },
+        lower_right: Complex {
+            re: lower_right_re,
+            im: selection.lower_right.im,
+        },
     }
 }
 
@@ -119,12 +143,24 @@ fn move_selection_down(
     let complex_y_per_char =
         num::abs(window.upper_left.im - window.lower_right.im) / terminal_bounds.1 as f64;
 
-    let upper_left_im = f64::min(selection.upper_left.im - (count as f64 * complex_y_per_char), window.upper_left.im); 
-    let lower_right_im = f64::min(selection.lower_right.im - (count as f64 * complex_y_per_char), window.upper_left.im); 
+    let upper_left_im = f64::min(
+        selection.upper_left.im - (count as f64 * complex_y_per_char),
+        window.upper_left.im,
+    );
+    let lower_right_im = f64::min(
+        selection.lower_right.im - (count as f64 * complex_y_per_char),
+        window.upper_left.im,
+    );
 
     Rect {
-        upper_left: Complex { re: selection.upper_left.re, im: upper_left_im},
-        lower_right: Complex { re: selection.lower_right.re, im: lower_right_im},
+        upper_left: Complex {
+            re: selection.upper_left.re,
+            im: upper_left_im,
+        },
+        lower_right: Complex {
+            re: selection.lower_right.re,
+            im: lower_right_im,
+        },
     }
 }
 
@@ -137,12 +173,24 @@ fn move_selection_up(
     let complex_y_per_char =
         num::abs(window.upper_left.im - window.lower_right.im) / terminal_bounds.1 as f64;
 
-    let upper_left_im = f64::max(selection.upper_left.im + (count as f64 * complex_y_per_char), window.lower_right.im); 
-    let lower_right_im = f64::max(selection.lower_right.im + (count as f64 * complex_y_per_char), window.lower_right.im); 
+    let upper_left_im = f64::max(
+        selection.upper_left.im + (count as f64 * complex_y_per_char),
+        window.lower_right.im,
+    );
+    let lower_right_im = f64::max(
+        selection.lower_right.im + (count as f64 * complex_y_per_char),
+        window.lower_right.im,
+    );
 
     Rect {
-        upper_left: Complex { re: selection.upper_left.re, im: upper_left_im},
-        lower_right: Complex { re: selection.lower_right.re, im: lower_right_im},
+        upper_left: Complex {
+            re: selection.upper_left.re,
+            im: upper_left_im,
+        },
+        lower_right: Complex {
+            re: selection.lower_right.re,
+            im: lower_right_im,
+        },
     }
 }
 
@@ -292,31 +340,34 @@ fn tui_loop(pixels: &mut Vec<u8>, bounds: (usize, usize), window: &Rect) {
                         &moving_selection,
                         &window,
                         (ts.0, ts.1 - 1), // TODO use variable for this
-                        1);
+                        1,
+                    );
                 }
                 Key::Char('d') => {
                     moving_selection = move_selection_right(
                         &moving_selection,
                         &window,
                         (ts.0, ts.1 - 1), // TODO use variable for this
-                        1);
+                        1,
+                    );
                 }
                 Key::Char('w') => {
                     moving_selection = move_selection_up(
                         &moving_selection,
                         &window,
                         (ts.0, ts.1 - 1), // TODO use variable for this
-                        1);
+                        1,
+                    );
                 }
                 Key::Char('s') => {
                     moving_selection = move_selection_down(
                         &moving_selection,
                         &window,
                         (ts.0, ts.1 - 1), // TODO use variable for this
-                        1);
+                        1,
+                    );
                 }
-                Key::Char('q') => {
-                }
+                Key::Char('q') => {}
                 _ => {}
             },
             // Event::Mouse(me) => match me {
@@ -489,6 +540,38 @@ fn write_image(
     Ok(())
 }
 
+fn increment_numbered_filename(file_path: &str) -> String {
+    let last_dot = file_path.find('.');
+
+    match last_dot {
+        None => file_path.to_string(),
+        Some(last_dot_index) => {
+            let first_non_numeric = file_path[..last_dot_index].rfind(|s: char| !s.is_numeric());
+            match first_non_numeric {
+                None => file_path.to_string(),
+                Some(first_non_numeric_index) => {
+                    if first_non_numeric_index == last_dot_index - 1 {
+                        format!(
+                            "{}1{}",
+                            file_path[..first_non_numeric_index + 1].to_string(),
+                            file_path[last_dot_index..].to_string()
+                        )
+                    } else {
+                        let num_str = &file_path[first_non_numeric_index + 1..last_dot_index];
+                        let num: u64 = num_str.parse::<u64>().unwrap() + 1;
+                        format!(
+                            "{}{}{}",
+                            file_path[..first_non_numeric_index + 1].to_string(),
+                            num,
+                            file_path[last_dot_index..].to_string()
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn test_parse_pair() {
     assert_eq!(parse_pair::<i32>("", ','), None);
@@ -546,4 +629,20 @@ fn test_complex_to_cursor_position() {
     let terminal_size = (200, 200);
     let (r, c) = complex_to_cursor_position(&selection.upper_left, &window, terminal_size);
     assert_eq!((r, c), (50, 50));
+}
+
+#[test]
+fn test_numbered_path() {
+    let sample_path: String = "/tmp/mandelbrot.png".to_string();
+
+    let numbered_1 = increment_numbered_filename(&sample_path);
+    assert_eq!(numbered_1, "/tmp/mandelbrot1.png");
+
+    let numbered_2 = increment_numbered_filename(&numbered_1);
+    assert_eq!(numbered_2, "/tmp/mandelbrot2.png");
+
+    let numbered_20: String = (1..=200u64).fold(sample_path.to_string(), |acc, _| {
+        increment_numbered_filename(&acc)
+    });
+    assert_eq!(numbered_20, "/tmp/mandelbrot200.png");
 }

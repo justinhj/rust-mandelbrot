@@ -6,10 +6,21 @@ This is an extension of the code you can find in the book Programming Rust: Fast
 Currently, just like the book example, you pass in a filename, image size and window into the set using two complex numbers for the top left and bottom right corners respectively.
 
 ```
-cargo r --release -- /tmp/mandle1.png 1280x768 -1.20,0.35 -1.0,0.20
+cargo r --release -- /tmp/mandle.png 1280x768 -1.20,0.35 -1.0,0.20
 ```
 
 ## TODO list
+Next...
+
+pass initial filename into tui loop 
+when user hits save get the next filename and save it
+
+when the user hits zoom reset the window coordinates 
+redraw the pixels array 
+draw the tui screen
+
+
+All...
 
 Function to map from Complex coord to screen cursor
 
