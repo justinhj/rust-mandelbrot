@@ -1,31 +1,30 @@
 use image::png::PNGEncoder;
 use image::ColorType;
 use num::Complex;
+// use std::cmp;
 use std::env;
 use std::fs::File;
 use std::io::{stdin, stdout, Write};
 use std::str::FromStr;
-use termion::event::{Event, Key, MouseEvent};
+use termion::event::{Event, Key}; // , MouseEvent};
 use termion::input::{MouseTerminal, TermRead};
 use termion::raw::IntoRawMode;
-use termion::{color, style};
-use std::cmp;
+use termion::color;
 
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 struct Rect {
     upper_left: Complex<f64>,
     lower_right: Complex<f64>,
 }
 impl PartialEq for Rect {
     fn eq(&self, other: &Self) -> bool {
-        float_cmp::approx_eq!(f64, self.upper_left.re, other.upper_left.re, ulps = 3) &&
-        float_cmp::approx_eq!(f64, self.upper_left.im, other.upper_left.im, ulps = 3) &&
-        float_cmp::approx_eq!(f64, self.lower_right.re, other.lower_right.re, ulps = 3) &&
-        float_cmp::approx_eq!(f64, self.lower_right.im, other.lower_right.im, ulps = 3)
+        float_cmp::approx_eq!(f64, self.upper_left.re, other.upper_left.re, ulps = 3)
+            && float_cmp::approx_eq!(f64, self.upper_left.im, other.upper_left.im, ulps = 3)
+            && float_cmp::approx_eq!(f64, self.lower_right.re, other.lower_right.re, ulps = 3)
+            && float_cmp::approx_eq!(f64, self.lower_right.im, other.lower_right.im, ulps = 3)
     }
 }
-impl Eq for Rect {
-}
+impl Eq for Rect {}
 
 fn main() {
     let args = env::args().collect::<Vec<String>>();
@@ -71,16 +70,93 @@ fn main() {
     write_image(&args[1], &pixels, bounds).expect("error writing PNG file");
 }
 
+// What is the width and height of a cursor
+
+// Given a selection within a larger window and the cursor bounds
+// return a new selection moved to the left the set number of cursor
+// positions.
+fn move_selection_left(
+    selection: &Rect,
+    window: &Rect,
+    terminal_bounds: (u16, u16),
+    count: u16,
+) -> Rect {
+    let complex_x_per_char =
+        num::abs(window.lower_right.re - window.upper_left.re) / terminal_bounds.0 as f64;
+
+    let upper_left_re = f64::max(selection.upper_left.re - (count as f64 * complex_x_per_char), window.upper_left.re); 
+    let lower_right_re = f64::max(selection.lower_right.re - (count as f64 * complex_x_per_char), window.upper_left.re); 
+
+    Rect {
+        upper_left: Complex { re: upper_left_re, im: selection.upper_left.im },
+        lower_right: Complex { re: lower_right_re, im: selection.lower_right.im },
+    }
+}
+
+fn move_selection_right(
+    selection: &Rect,
+    window: &Rect,
+    terminal_bounds: (u16, u16),
+    count: u16,
+) -> Rect {
+    let complex_x_per_char =
+        num::abs(window.lower_right.re - window.upper_left.re) / terminal_bounds.0 as f64;
+    let upper_left_re = f64::min(selection.upper_left.re + (count as f64 * complex_x_per_char), window.lower_right.re); 
+    let lower_right_re = f64::min(selection.lower_right.re + (count as f64 * complex_x_per_char), window.lower_right.re); 
+
+    Rect {
+        upper_left: Complex { re: upper_left_re, im: selection.upper_left.im },
+        lower_right: Complex { re: lower_right_re, im: selection.lower_right.im },
+    }
+}
+
+fn move_selection_down(
+    selection: &Rect,
+    window: &Rect,
+    terminal_bounds: (u16, u16),
+    count: u16,
+) -> Rect {
+    let complex_y_per_char =
+        num::abs(window.upper_left.im - window.lower_right.im) / terminal_bounds.1 as f64;
+
+    let upper_left_im = f64::min(selection.upper_left.im - (count as f64 * complex_y_per_char), window.upper_left.im); 
+    let lower_right_im = f64::min(selection.lower_right.im - (count as f64 * complex_y_per_char), window.upper_left.im); 
+
+    Rect {
+        upper_left: Complex { re: selection.upper_left.re, im: upper_left_im},
+        lower_right: Complex { re: selection.lower_right.re, im: lower_right_im},
+    }
+}
+
+fn move_selection_up(
+    selection: &Rect,
+    window: &Rect,
+    terminal_bounds: (u16, u16),
+    count: u16,
+) -> Rect {
+    let complex_y_per_char =
+        num::abs(window.upper_left.im - window.lower_right.im) / terminal_bounds.1 as f64;
+
+    let upper_left_im = f64::max(selection.upper_left.im + (count as f64 * complex_y_per_char), window.lower_right.im); 
+    let lower_right_im = f64::max(selection.lower_right.im + (count as f64 * complex_y_per_char), window.lower_right.im); 
+
+    Rect {
+        upper_left: Complex { re: selection.upper_left.re, im: upper_left_im},
+        lower_right: Complex { re: selection.lower_right.re, im: lower_right_im},
+    }
+}
+
 /// Given bounds in cursor space and a Complex number return the cursor position (col,row)
 fn complex_to_cursor_position(
     complex: &Complex<f64>,
     window: &Rect,
     terminal_bounds: (u16, u16),
 ) -> (u16, u16) {
-
     // Calculate how much complex number is represented by one cursor position for rows and columns
-    let complex_x_per_char = num::abs(window.lower_right.re - window.upper_left.re) / terminal_bounds.0 as f64;
-    let complex_y_per_char = num::abs(window.upper_left.im - window.lower_right.im) / terminal_bounds.1 as f64;
+    let complex_x_per_char =
+        num::abs(window.lower_right.re - window.upper_left.re) / terminal_bounds.0 as f64;
+    let complex_y_per_char =
+        num::abs(window.upper_left.im - window.lower_right.im) / terminal_bounds.1 as f64;
 
     let c: f64 = num::abs(complex.re - window.upper_left.re) / complex_x_per_char;
     let r: f64 = num::abs(window.lower_right.im - complex.im) / complex_y_per_char;
@@ -116,13 +192,10 @@ fn terminal_render(
     }
 
     // Draw the zoom selection
-    let (start_c,start_r) =  complex_to_cursor_position(&selection.upper_left,
-        window,
-        terminal_size);
+    let (start_c, start_r) =
+        complex_to_cursor_position(&selection.upper_left, window, terminal_size);
 
-    let (end_c,end_r) =  complex_to_cursor_position(&selection.lower_right,
-        window,
-        terminal_size);
+    let (end_c, end_r) = complex_to_cursor_position(&selection.lower_right, window, terminal_size);
 
     let selection_colour = color::AnsiValue::grayscale(20);
 
@@ -130,12 +203,12 @@ fn terminal_render(
     for c in start_c..end_c {
         println!(
             "{}{}\u{2588}",
-            termion::cursor::Goto(c,end_r),
+            termion::cursor::Goto(c, end_r),
             termion::color::Fg(selection_colour)
         );
         println!(
             "{}{}\u{2588}",
-            termion::cursor::Goto(c,start_r),
+            termion::cursor::Goto(c, start_r),
             termion::color::Fg(selection_colour)
         );
     }
@@ -144,18 +217,18 @@ fn terminal_render(
     for r in start_r..end_r {
         println!(
             "{}{}\u{2588}",
-            termion::cursor::Goto(start_c,r),
+            termion::cursor::Goto(start_c, r),
             termion::color::Fg(selection_colour)
         );
         println!(
             "{}{}\u{2588}",
-            termion::cursor::Goto(end_c,r),
+            termion::cursor::Goto(end_c, r),
             termion::color::Fg(selection_colour)
         );
     }
 }
 
-fn selection_from_window(window: &Rect, zoom: f64) -> Rect {
+fn selection_from_window(window: &Rect, _zoom: f64) -> Rect {
     // TODO use zoom
     let quarter_width = num::abs(window.lower_right.re - window.upper_left.re) / 4.0;
     let quarter_height = num::abs(window.upper_left.im - window.lower_right.im) / 4.0;
@@ -188,7 +261,7 @@ fn tui_loop(pixels: &mut Vec<u8>, bounds: (usize, usize), window: &Rect) {
 
     write!(
         stdout,
-        "{}{}Esc to exit - wasd to move selection - qz adjust zoom - space to write image",
+        "{}{}Esc to exit - wasd to move selection - z to zoom - space to write image",
         termion::clear::All,
         termion::cursor::Goto(1, 1)
     )
@@ -204,6 +277,8 @@ fn tui_loop(pixels: &mut Vec<u8>, bounds: (usize, usize), window: &Rect) {
     );
     stdout.flush().unwrap();
 
+    let mut moving_selection = selection.clone();
+
     for c in stdin.events() {
         let evt = c.unwrap();
         match evt {
@@ -212,15 +287,35 @@ fn tui_loop(pixels: &mut Vec<u8>, bounds: (usize, usize), window: &Rect) {
                     println!("{}", termion::clear::All);
                     break;
                 }
-                Key::Char('q') => {
-                    terminal_render(
-                        &pixels,
-                        bounds,
+                Key::Char('a') => {
+                    moving_selection = move_selection_left(
+                        &moving_selection,
                         &window,
-                        &selection,
-                        (ts.0, ts.1 - 1),
-                        (0, 1),
-                    );
+                        (ts.0, ts.1 - 1), // TODO use variable for this
+                        1);
+                }
+                Key::Char('d') => {
+                    moving_selection = move_selection_right(
+                        &moving_selection,
+                        &window,
+                        (ts.0, ts.1 - 1), // TODO use variable for this
+                        1);
+                }
+                Key::Char('w') => {
+                    moving_selection = move_selection_up(
+                        &moving_selection,
+                        &window,
+                        (ts.0, ts.1 - 1), // TODO use variable for this
+                        1);
+                }
+                Key::Char('s') => {
+                    moving_selection = move_selection_down(
+                        &moving_selection,
+                        &window,
+                        (ts.0, ts.1 - 1), // TODO use variable for this
+                        1);
+                }
+                Key::Char('q') => {
                 }
                 _ => {}
             },
@@ -232,6 +327,14 @@ fn tui_loop(pixels: &mut Vec<u8>, bounds: (usize, usize), window: &Rect) {
             // },
             _ => {}
         }
+        terminal_render(
+            &pixels,
+            bounds,
+            &window,
+            &moving_selection,
+            (ts.0, ts.1 - 1),
+            (0, 1),
+        );
         stdout.flush().unwrap();
     }
 }
@@ -428,33 +531,19 @@ fn test_pixel_to_point() {
 #[test]
 fn test_complex_to_cursor_position() {
     let window = Rect {
-        upper_left: Complex {
-            re: 0.0,
-            im: 100.0,
-        },
-        lower_right: Complex {
-            re: 100.0,
-            im: 0.0,
-        }
+        upper_left: Complex { re: 0.0, im: 100.0 },
+        lower_right: Complex { re: 100.0, im: 0.0 },
     };
     let selection = selection_from_window(&window, 1.0);
     assert_eq!(
         selection,
-         Rect {
-            upper_left: Complex {
-                re: 25.0,
-                im: 75.0,
-            },
-            lower_right: Complex {
-                re: 75.0,
-                im: 25.0,
-            }
+        Rect {
+            upper_left: Complex { re: 25.0, im: 75.0 },
+            lower_right: Complex { re: 75.0, im: 25.0 }
         }
     );
-   
-    let terminal_size = (200,200);
-    let (r,c) =  complex_to_cursor_position(&selection.upper_left,
-        &window,
-        terminal_size);
-    assert_eq!((r,c), (50,50));
+
+    let terminal_size = (200, 200);
+    let (r, c) = complex_to_cursor_position(&selection.upper_left, &window, terminal_size);
+    assert_eq!((r, c), (50, 50));
 }
