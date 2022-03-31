@@ -1,13 +1,12 @@
 use image::png::PNGEncoder;
 use image::ColorType;
 use num::Complex;
-// use std::cmp;
 use std::env;
 use std::fs::File;
 use std::io::{stdin, stdout, Write};
 use std::str::FromStr;
 use termion::color;
-use termion::event::{Event, Key}; // , MouseEvent};
+use termion::event::{Event, Key};
 use termion::input::{MouseTerminal, TermRead};
 use termion::raw::IntoRawMode;
 
@@ -62,12 +61,7 @@ fn main() {
     };
 
     assert!(num_threads > 0);
-
-    parallel_render(&mut pixels, bounds, upper_left, lower_right, num_threads);
-
-    tui_loop(&mut pixels, bounds, &window);
-
-    write_image(&args[1], &pixels, bounds).expect("error writing PNG file");
+    tui_loop(&args[1], num_threads, &mut pixels, bounds, &window);
 }
 
 // What is the width and height of a cursor
@@ -292,15 +286,23 @@ fn selection_from_window(window: &Rect, _zoom: f64) -> Rect {
     };
 }
 
-/// Render to the terminal
-fn tui_loop(pixels: &mut Vec<u8>, bounds: (usize, usize), window: &Rect) {
+/// Event loop and renderer
+/// This enables the user to write the image, move and zoom the selection window 
+/// and so on.
+fn tui_loop(file_path: &str,
+            num_threads: usize,
+            pixels: &mut Vec<u8>, 
+            bounds: (usize, usize), 
+            initial_window: &Rect) {
+    let mut numbered_file_path = increment_numbered_filename(file_path);
     let zoom = 0.5f64;
-    let selection = selection_from_window(&window, zoom);
-
     let stdin = stdin();
     let mut stdout = MouseTerminal::from(stdout().into_raw_mode().unwrap());
 
     let mut ts = termion::terminal_size().unwrap();
+    let mut window = initial_window.clone();
+
+    let selection = selection_from_window(&window, zoom);
 
     // Temp for debugging in IntelliJ the terminal has zero size
     if ts.0 == 0 {
@@ -309,12 +311,14 @@ fn tui_loop(pixels: &mut Vec<u8>, bounds: (usize, usize), window: &Rect) {
 
     write!(
         stdout,
-        "{}{}Esc to exit - wasd to move selection - z to zoom - space to write image",
+        "{}{}Esc to exit - wasd to move selection - Enter to write current image file and zoom",
         termion::clear::All,
         termion::cursor::Goto(1, 1)
     )
     .unwrap();
 
+    // Render the image to the pizel array
+    parallel_render(pixels, bounds, window.upper_left, window.lower_right, num_threads);
     terminal_render(
         &pixels,
         bounds,
@@ -367,15 +371,18 @@ fn tui_loop(pixels: &mut Vec<u8>, bounds: (usize, usize), window: &Rect) {
                         1,
                     );
                 }
+                Key::Char('\n') => {
+                     write_image(&numbered_file_path, &pixels, bounds).expect("error writing PNG file");
+                     numbered_file_path = increment_numbered_filename(&numbered_file_path);
+                }
+                Key::Char('z') => {
+                    window.clone_from(&moving_selection);
+                    moving_selection = selection_from_window(&window, zoom);
+                    parallel_render(pixels, bounds, window.upper_left, window.lower_right, num_threads);
+                }
                 Key::Char('q') => {}
                 _ => {}
             },
-            // Event::Mouse(me) => match me {
-            //     MouseEvent::Press(_, x, y) => {
-            //         write!(stdout, "{}x", termion::cursor::Goto(x, y)).unwrap();
-            //     }
-            //     _ => (),
-            // },
             _ => {}
         }
         terminal_render(
@@ -399,8 +406,6 @@ fn parallel_render(
     lower_right: Complex<f64>,
     num_threads: usize,
 ) {
-    println!("Parallel render with {:?} threads", num_threads);
-
     let rows_per_band = bounds.1 / num_threads + 1;
 
     let bands: Vec<&mut [u8]> = pixels.chunks_mut(rows_per_band * bounds.0).collect();
