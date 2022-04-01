@@ -15,6 +15,9 @@ struct Rect {
     upper_left: Complex<f64>,
     lower_right: Complex<f64>,
 }
+
+// I need Partial ordering for Rectangles but they use f64 which you can't compare normally, 
+// so use float-cmp crate to do approximate comparisons...
 impl PartialEq for Rect {
     fn eq(&self, other: &Self) -> bool {
         float_cmp::approx_eq!(f64, self.upper_left.re, other.upper_left.re, ulps = 3)
@@ -64,7 +67,8 @@ fn main() {
     tui_loop(&args[1], num_threads, &mut pixels, bounds, &window);
 }
 
-// What is the width and height of a cursor
+// The following four functions to move the selection window around 
+// are incredibly lame and need to be refactored.
 
 // Given a selection within a larger window and the cursor bounds
 // return a new selection moved to the left the set number of cursor
