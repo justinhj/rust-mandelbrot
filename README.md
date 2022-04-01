@@ -1,5 +1,5 @@
 # rust-mandelbrot
-This is an extension of the code you can find in the book Programming Rust: Fast, Safe Systems Development that renders Mandelbrot sets to png files. I've add a TUI interface to enable viewing the image in the terminal, positioning and zooming into the image and the ability to save the current image with a key press.
+This is an extension of the code you can find in the (excellent) book [Programming in Rust - 2nd Edition](https://www.oreilly.com/library/view/programming-rust-2nd/9781492052586/) that renders Mandelbrot sets to png files. I've added a TUI interface to enable viewing the image in the terminal, positioning and zooming into the image and the ability to render the current image as a PNG with a key press.
 
 ## Running
 
@@ -29,7 +29,3 @@ Implement zoom back out and changing the size of the selection window.
 Create animations with automated or scripted zooming.
 
 Add colours.
-
-## References
-
-[Link to book](https://www.oreilly.com/library/view/programming-rust-2nd/9781492052586/)
