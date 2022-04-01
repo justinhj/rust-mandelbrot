@@ -6,35 +6,30 @@ This is an extension of the code you can find in the book Programming Rust: Fast
 Currently, just like the book example, you pass in a filename, image size and window into the set using two complex numbers for the top left and bottom right corners respectively.
 
 ```
-cargo r --release -- /tmp/mandle.png 1280x768 -1.20,0.35 -1.0,0.20
+cargo run --release -- /tmp/mandel.png 2048x1080 -2.8,2.0 2.5,-2.0 1
 ```
 
-## TODO list
-Next...
+Pressing Return/Enter will save the current image to the file path you give. Subsequent images are automatically 
+numbered, so you will get mandel1.png, mandel2.png and so on. It will overwrite any existing images so save to 
+a different folder each time.
 
-pass initial filename into tui loop 
-when user hits save get the next filename and save it
+Move the selection around with WASD keys and press Z to zoom. You can't zoom back out and accuracy issues will 
+start to make the images very boring. These are both exercises for me in the future or for the interested reader.
 
-when the user hits zoom reset the window coordinates 
-redraw the pixels array 
-draw the tui screen
+![TUI screen shot](./images/tuimandelbrot.png)
 
+![Sample rendered image](./images/mandle5.png)
 
-All...
+## Ideas
 
-Function to map from Complex coord to screen cursor
+Refactor the selection window moving code which is awful.
 
-Let the user move visible selection window around with the mouse
-  Clamp it to the screen area
-  It should have size and aspect ratio of pixels 
-  It should start at half the current selected area
+Implement zoom back out and changing the size of the selection window.
 
-When user presses a particular key zoom in and redraw 
+Create animations with automated or scripted zooming.
 
-Add two keys for users to change the zoom level
+Add colours.
 
-Add a key to save the current image appending a number to the given filename
+## References
 
-
-
-
+[Link to book](https://www.oreilly.com/library/view/programming-rust-2nd/9781492052586/)

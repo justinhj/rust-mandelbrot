@@ -315,7 +315,7 @@ fn tui_loop(file_path: &str,
 
     write!(
         stdout,
-        "{}{}Esc to exit - wasd to move selection - Enter to write current image file and zoom",
+        "{}{}Esc to exit - wasd to move selection - Enter to write current image file and z to zoom",
         termion::clear::All,
         termion::cursor::Goto(1, 1)
     )
@@ -335,6 +335,8 @@ fn tui_loop(file_path: &str,
 
     let mut moving_selection = selection.clone();
 
+    let terminal_bounds = (ts.0, ts.1 - 1);
+
     for c in stdin.events() {
         let evt = c.unwrap();
         match evt {
@@ -347,7 +349,7 @@ fn tui_loop(file_path: &str,
                     moving_selection = move_selection_left(
                         &moving_selection,
                         &window,
-                        (ts.0, ts.1 - 1), // TODO use variable for this
+                        terminal_bounds,
                         1,
                     );
                 }
@@ -355,7 +357,7 @@ fn tui_loop(file_path: &str,
                     moving_selection = move_selection_right(
                         &moving_selection,
                         &window,
-                        (ts.0, ts.1 - 1), // TODO use variable for this
+                        terminal_bounds,
                         1,
                     );
                 }
@@ -363,7 +365,7 @@ fn tui_loop(file_path: &str,
                     moving_selection = move_selection_up(
                         &moving_selection,
                         &window,
-                        (ts.0, ts.1 - 1), // TODO use variable for this
+                        terminal_bounds,
                         1,
                     );
                 }
@@ -371,7 +373,7 @@ fn tui_loop(file_path: &str,
                     moving_selection = move_selection_down(
                         &moving_selection,
                         &window,
-                        (ts.0, ts.1 - 1), // TODO use variable for this
+                        terminal_bounds,
                         1,
                     );
                 }
@@ -384,7 +386,6 @@ fn tui_loop(file_path: &str,
                     moving_selection = selection_from_window(&window, zoom);
                     parallel_render(pixels, bounds, window.upper_left, window.lower_right, num_threads);
                 }
-                Key::Char('q') => {}
                 _ => {}
             },
             _ => {}
