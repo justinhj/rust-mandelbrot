@@ -20,12 +20,6 @@ start to make the images very boring. These are both exercises for me in the fut
 
 ![Sample rendered image](./images/mandle5.png)
 
-## Ideas
+## Issues
 
-Refactor the selection window moving code which is awful.
-
-Implement zoom back out and changing the size of the selection window.
-
-Create animations with automated or scripted zooming.
-
-Add colours.
+If you're interested in playing around with the code check out the Issues for things to do.
