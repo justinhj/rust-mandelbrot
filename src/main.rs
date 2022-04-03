@@ -10,24 +10,6 @@ use termion::event::{Event, Key};
 use termion::input::{MouseTerminal, TermRead};
 use termion::raw::IntoRawMode;
 
-#[derive(Debug, Clone)]
-struct Rect {
-    upper_left: Complex<f64>,
-    lower_right: Complex<f64>,
-}
-
-// I need Partial ordering for Rectangles but they use f64 which you can't compare normally, 
-// so use float-cmp crate to do approximate comparisons...
-impl PartialEq for Rect {
-    fn eq(&self, other: &Self) -> bool {
-        float_cmp::approx_eq!(f64, self.upper_left.re, other.upper_left.re, ulps = 3)
-            && float_cmp::approx_eq!(f64, self.upper_left.im, other.upper_left.im, ulps = 3)
-            && float_cmp::approx_eq!(f64, self.lower_right.re, other.lower_right.re, ulps = 3)
-            && float_cmp::approx_eq!(f64, self.lower_right.im, other.lower_right.im, ulps = 3)
-    }
-}
-impl Eq for Rect {}
-
 fn main() {
     let args = env::args().collect::<Vec<String>>();
 
@@ -65,6 +47,12 @@ fn main() {
 
     assert!(num_threads > 0);
     tui_loop(&args[1], num_threads, &mut pixels, bounds, &window);
+}
+
+#[derive(Debug, Clone)]
+struct Rect {
+    upper_left: Complex<f64>,
+    lower_right: Complex<f64>,
 }
 
 // The following four functions to move the selection window around 
@@ -621,38 +609,55 @@ fn test_pixel_to_point() {
     );
 }
 
-#[test]
-fn test_complex_to_cursor_position() {
-    let window = Rect {
-        upper_left: Complex { re: 0.0, im: 100.0 },
-        lower_right: Complex { re: 100.0, im: 0.0 },
-    };
-    let selection = selection_from_window(&window, 1.0);
-    assert_eq!(
-        selection,
-        Rect {
-            upper_left: Complex { re: 25.0, im: 75.0 },
-            lower_right: Complex { re: 75.0, im: 25.0 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // In tests I compare Rect but since you can't easily compare f64, I use the float_cmp crate
+    // and implement PartialEq and Eq...
+    impl PartialEq for Rect {
+        fn eq(&self, other: &Self) -> bool {
+            float_cmp::approx_eq!(f64, self.upper_left.re, other.upper_left.re, ulps = 3)
+                && float_cmp::approx_eq!(f64, self.upper_left.im, other.upper_left.im, ulps = 3)
+                && float_cmp::approx_eq!(f64, self.lower_right.re, other.lower_right.re, ulps = 3)
+                && float_cmp::approx_eq!(f64, self.lower_right.im, other.lower_right.im, ulps = 3)
         }
-    );
+    }
+    impl Eq for Rect {}
 
-    let terminal_size = (200, 200);
-    let (r, c) = complex_to_cursor_position(&selection.upper_left, &window, terminal_size);
-    assert_eq!((r, c), (50, 50));
-}
+    #[test]
+    fn test_complex_to_cursor_position() {
+        let window = Rect {
+            upper_left: Complex { re: 0.0, im: 100.0 },
+            lower_right: Complex { re: 100.0, im: 0.0 },
+        };
+        let selection = selection_from_window(&window, 1.0);
+        assert_eq!(
+            selection,
+            Rect {
+                upper_left: Complex { re: 25.0, im: 75.0 },
+                lower_right: Complex { re: 75.0, im: 25.0 }
+            }
+        );
 
-#[test]
-fn test_numbered_path() {
-    let sample_path: String = "/tmp/mandelbrot.png".to_string();
+        let terminal_size = (200, 200);
+        let (r, c) = complex_to_cursor_position(&selection.upper_left, &window, terminal_size);
+        assert_eq!((r, c), (50, 50));
+    }
 
-    let numbered_1 = increment_numbered_filename(&sample_path);
-    assert_eq!(numbered_1, "/tmp/mandelbrot1.png");
+    #[test]
+    fn test_numbered_path() {
+        let sample_path: String = "/tmp/mandelbrot.png".to_string();
 
-    let numbered_2 = increment_numbered_filename(&numbered_1);
-    assert_eq!(numbered_2, "/tmp/mandelbrot2.png");
+        let numbered_1 = increment_numbered_filename(&sample_path);
+        assert_eq!(numbered_1, "/tmp/mandelbrot1.png");
 
-    let numbered_20: String = (1..=200u64).fold(sample_path.to_string(), |acc, _| {
-        increment_numbered_filename(&acc)
-    });
-    assert_eq!(numbered_20, "/tmp/mandelbrot200.png");
+        let numbered_2 = increment_numbered_filename(&numbered_1);
+        assert_eq!(numbered_2, "/tmp/mandelbrot2.png");
+
+        let numbered_20: String = (1..=200u64).fold(sample_path.to_string(), |acc, _| {
+            increment_numbered_filename(&acc)
+        });
+        assert_eq!(numbered_20, "/tmp/mandelbrot200.png");
+    }
 }
