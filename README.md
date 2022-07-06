@@ -1,6 +1,12 @@
 # rust-mandelbrot
 This is an extension of the code you can find in the (excellent) book [Programming in Rust - 2nd Edition](https://www.oreilly.com/library/view/programming-rust-2nd/9781492052586/) that renders Mandelbrot sets to png files. I've added a TUI interface to enable viewing the image in the terminal, positioning and zooming into the image and the ability to render the current image as a PNG with a key press.
 
+## Compatibility
+- Mac yes
+- Windows no (I need to change from Termion to Crossterm, see https://github.com/Byron/dua-cli/issues/2
+- Linux I don't know
+
+
 ## Running
 
 Currently, just like the book example, you pass in a filename, image size and window into the set using two complex numbers for the top left and bottom right corners respectively.
