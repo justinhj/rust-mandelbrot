@@ -2,12 +2,21 @@ use anyhow::{anyhow, Context, Result};
 use image::ColorType;
 use num::Complex;
 use std::env;
-use std::io::{stdin, stdout, Write};
+use std::io;
 use std::str::FromStr;
-use termion::color;
-use termion::event::{Event, Key};
-use termion::input::{MouseTerminal, TermRead};
-use termion::raw::IntoRawMode;
+
+use ratatui::{
+    backend::{Backend, CrosstermBackend},
+    layout::{Constraint, Direction, Layout},
+    style::{Color, Style},
+    widgets::Paragraph,
+    Frame, Terminal,
+};
+use crossterm::{
+    event::{self, Event as CEvent, KeyCode},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
 
 struct Config {
     file_path: String,
@@ -15,6 +24,63 @@ struct Config {
     upper_left: Complex<f64>,
     lower_right: Complex<f64>,
     num_threads: usize,
+}
+
+struct App {
+    pixels: Vec<u8>,
+    bounds: (usize, usize),
+    window: Rect,
+    moving_selection: Rect,
+    num_threads: usize,
+    numbered_file_path: String,
+}
+
+impl App {
+    fn new(config: Config) -> Self {
+        let window = Rect {
+            upper_left: config.upper_left,
+            lower_right: config.lower_right,
+        };
+        let selection = selection_from_window(&window, 0.5);
+        let numbered_file_path = increment_numbered_filename(&config.file_path);
+
+        App {
+            pixels: vec![0; config.bounds.0 * config.bounds.1],
+            bounds: config.bounds,
+            window,
+            moving_selection: selection,
+            num_threads: config.num_threads,
+            numbered_file_path,
+        }
+    }
+
+    fn update_mandelbrot(&mut self) {
+        parallel_render(
+            &mut self.pixels,
+            self.bounds,
+            self.window.upper_left,
+            self.window.lower_right,
+            self.num_threads,
+        );
+    }
+
+    fn move_selection(&mut self, cols: i32, rows: i32, terminal_size: (u16, u16)) {
+        self.moving_selection =
+            self.moving_selection
+                .move_by(&self.window, terminal_size, cols, rows);
+    }
+
+    fn zoom(&mut self) {
+        self.window.clone_from(&self.moving_selection);
+        self.moving_selection = selection_from_window(&self.window, 0.5);
+        self.update_mandelbrot();
+    }
+
+    fn save_image(&mut self) -> Result<()> {
+        write_image(&self.numbered_file_path, &self.pixels, self.bounds)?;
+        self.numbered_file_path = increment_numbered_filename(&self.numbered_file_path);
+        Ok(())
+    }
 }
 
 fn parse_args() -> Result<Config> {
@@ -62,20 +128,31 @@ fn main() -> Result<()> {
         }
     };
 
-    let window = Rect {
-        upper_left: config.upper_left,
-        lower_right: config.lower_right,
-    };
+    let mut app = App::new(config);
+    app.update_mandelbrot();
 
-    let mut pixels = vec![0; config.bounds.0 * config.bounds.1];
+    // setup terminal
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen, event::EnableMouseCapture)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
 
-    tui_loop(
-        &config.file_path,
-        config.num_threads,
-        &mut pixels,
-        config.bounds,
-        &window,
+    // run app
+    let res = run_app(&mut terminal, &mut app);
+
+    // restore terminal
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        event::DisableMouseCapture
     )?;
+    terminal.show_cursor()?;
+
+    if let Err(err) = res {
+        println!("{:?}", err)
+    }
 
     Ok(())
 }
@@ -141,122 +218,22 @@ fn complex_to_cursor_position(
     let complex_width = (window.lower_right.re - window.upper_left.re).abs();
     let complex_height = (window.upper_left.im - window.lower_right.im).abs();
 
-    let c = if complex_width > 0.0 {
-        ((complex.re - window.upper_left.re) / complex_width * (width - 1) as f64).round() as i32
+    let c = if complex_width > 0.0 && width > 1 {
+        ((complex.re - window.upper_left.re) / complex_width * (width as f64 - 1.0)).round() as i32
     } else {
         0
     };
 
-    let r = if complex_height > 0.0 {
-        ((window.upper_left.im - complex.im) / complex_height * (height - 1) as f64).round() as i32
+    let r = if complex_height > 0.0 && height > 1 {
+        ((window.upper_left.im - complex.im) / complex_height * (height as f64 - 1.0)).round() as i32
     } else {
         0
     };
 
     (
-        (c.clamp(0, width as i32 - 1) + 1) as u16,
-        (r.clamp(0, height as i32 - 1) + 1) as u16,
+        c.clamp(0, width as i32 - 1) as u16,
+        r.clamp(0, height as i32 - 1) as u16,
     )
-}
-
-/// Draw the pixels of the Mandelbrot set as best we can in the terminal
-/// https://www.unicode.org/charts/PDF/U2580.pdf
-/// Window is the complex coordinates of the window into the Mandelbrot set
-/// Selection is the current user selection for the next zoom
-fn terminal_render(
-    pixels: &[u8],
-    bounds: (usize, usize),
-    window: &Rect,
-    selection: &Rect,
-    terminal_size: (u16, u16),
-    terminal_window_offset: (u16, u16),
-) -> Result<()> {
-    let mut stdout = std::io::BufWriter::new(std::io::stdout());
-    let (cols, rows) = terminal_size;
-    let truecolor = has_truecolor();
-
-    // Draw the pixels
-    for c in 1..cols {
-        let x_start = (c - 1) as usize * bounds.0 / cols as usize;
-        let x_end = c as usize * bounds.0 / cols as usize;
-
-        for r_idx in 1..rows {
-            let y_start = (r_idx - 1) as usize * bounds.1 / rows as usize;
-            let y_end = r_idx as usize * bounds.1 / rows as usize;
-
-            let mut sum: usize = 0;
-            let mut count: usize = 0;
-            for x in x_start..x_end {
-                for y in y_start..y_end {
-                    sum += pixels[x + y * bounds.0] as usize;
-                    count += 1;
-                }
-            }
-
-            let avg = if count > 0 { (sum / count) as u8 } else { 0 };
-
-            if truecolor {
-                let (r, g, b) = palette(avg);
-                write!(
-                    stdout,
-                    "{}{}\u{2588}",
-                    termion::cursor::Goto(c + terminal_window_offset.0, r_idx + terminal_window_offset.1),
-                    termion::color::Fg(termion::color::Rgb(r, g, b))
-                )?;
-            } else {
-                let pixel = (avg as usize * 24 / 256) as u8;
-                write!(
-                    stdout,
-                    "{}{}\u{2588}",
-                    termion::cursor::Goto(c + terminal_window_offset.0, r_idx + terminal_window_offset.1),
-                    termion::color::Fg(termion::color::AnsiValue::grayscale(pixel))
-                )?;
-            }
-        }
-    }
-
-    // Draw the zoom selection
-    let (start_c, start_r) =
-        complex_to_cursor_position(&selection.upper_left, window, (cols - 1, rows - 1));
-
-    let (end_c, end_r) =
-        complex_to_cursor_position(&selection.lower_right, window, (cols - 1, rows - 1));
-
-    let selection_colour = color::AnsiValue::grayscale(20);
-
-    // Top and bottom
-    for c in start_c..=end_c {
-        write!(
-            stdout,
-            "{}{}\u{2588}",
-            termion::cursor::Goto(c + terminal_window_offset.0, start_r + terminal_window_offset.1),
-            termion::color::Fg(selection_colour)
-        )?;
-        write!(
-            stdout,
-            "{}{}\u{2588}",
-            termion::cursor::Goto(c + terminal_window_offset.0, end_r + terminal_window_offset.1),
-            termion::color::Fg(selection_colour)
-        )?;
-    }
-
-    // Sides
-    for r in start_r..=end_r {
-        write!(
-            stdout,
-            "{}{}\u{2588}",
-            termion::cursor::Goto(start_c + terminal_window_offset.0, r + terminal_window_offset.1),
-            termion::color::Fg(selection_colour)
-        )?;
-        write!(
-            stdout,
-            "{}{}\u{2588}",
-            termion::cursor::Goto(end_c + terminal_window_offset.0, r + terminal_window_offset.1),
-            termion::color::Fg(selection_colour)
-        )?;
-    }
-    stdout.flush()?;
-    Ok(())
 }
 
 fn selection_from_window(window: &Rect, _zoom: f64) -> Rect {
@@ -275,116 +252,112 @@ fn selection_from_window(window: &Rect, _zoom: f64) -> Rect {
     }
 }
 
-/// Event loop and renderer
-/// This enables the user to write the image, move and zoom the selection window 
-/// and so on.
-fn tui_loop(
-    file_path: &str,
-    num_threads: usize,
-    pixels: &mut [u8],
-    bounds: (usize, usize),
-    initial_window: &Rect,
-) -> Result<()> {
-    let mut numbered_file_path = increment_numbered_filename(file_path);
-    let zoom = 0.5f64;
-    let stdin = stdin();
-    let mut stdout = MouseTerminal::from(
-        stdout()
-            .into_raw_mode()
-            .context("failed to set raw mode")?,
-    );
+fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<()> {
+    loop {
+        terminal.draw(|f| ui(f, app))?;
 
-    let mut ts = termion::terminal_size().context("failed to get terminal size")?;
-    let mut window = initial_window.clone();
+        if event::poll(std::time::Duration::from_millis(16))? {
+            if let CEvent::Key(key) = event::read()? {
+                let size = terminal.size()?;
+                let mandelbrot_area = (size.width, size.height.saturating_sub(1));
 
-    let selection = selection_from_window(&window, zoom);
-
-    // Temp for debugging in IntelliJ the terminal has zero size
-    if ts.0 == 0 {
-        ts = (120, 80);
-    }
-
-    write!(
-        stdout,
-        "{}{}Esc to exit - wasd to move selection - Enter to write current image file and z to zoom",
-        termion::clear::All,
-        termion::cursor::Goto(1, 1)
-    )
-    .context("failed to write to stdout")?;
-
-    // Render the image to the pizel array
-    parallel_render(
-        pixels,
-        bounds,
-        window.upper_left,
-        window.lower_right,
-        num_threads,
-    );
-    terminal_render(
-        pixels,
-        bounds,
-        &window,
-        &selection,
-        (ts.0, ts.1 - 1),
-        (0, 1),
-    )?;
-    stdout.flush().context("failed to flush stdout")?;
-
-    let mut moving_selection = selection.clone();
-
-    let terminal_bounds = (ts.0, ts.1 - 1);
-
-    for c in stdin.events() {
-        let evt = c.context("failed to read event")?;
-        if let Event::Key(key) = evt {
-            match key {
-                Key::Esc => {
-                    write!(stdout, "{}", termion::clear::All).context("failed to clear screen")?;
-                    break;
+                match key.code {
+                    KeyCode::Esc => return Ok(()),
+                    KeyCode::Char('a') => app.move_selection(-1, 0, mandelbrot_area),
+                    KeyCode::Char('d') => app.move_selection(1, 0, mandelbrot_area),
+                    KeyCode::Char('w') => app.move_selection(0, 1, mandelbrot_area),
+                    KeyCode::Char('s') => app.move_selection(0, -1, mandelbrot_area),
+                    KeyCode::Char('z') => app.zoom(),
+                    KeyCode::Enter => {
+                        app.save_image().expect("failed to save image");
+                    }
+                    _ => {}
                 }
-                Key::Char('a') => {
-                    moving_selection = moving_selection.move_by(&window, terminal_bounds, -1, 0);
-                }
-                Key::Char('d') => {
-                    moving_selection = moving_selection.move_by(&window, terminal_bounds, 1, 0);
-                }
-                Key::Char('w') => {
-                    moving_selection = moving_selection.move_by(&window, terminal_bounds, 0, 1);
-                }
-                Key::Char('s') => {
-                    moving_selection = moving_selection.move_by(&window, terminal_bounds, 0, -1);
-                }
-
-                Key::Char('\n') => {
-                    write_image(&numbered_file_path, pixels, bounds)
-                        .context("error writing PNG file")?;
-                    numbered_file_path = increment_numbered_filename(&numbered_file_path);
-                }
-                Key::Char('z') => {
-                    window.clone_from(&moving_selection);
-                    moving_selection = selection_from_window(&window, zoom);
-                    parallel_render(
-                        pixels,
-                        bounds,
-                        window.upper_left,
-                        window.lower_right,
-                        num_threads,
-                    );
-                }
-                _ => {}
             }
         }
-        terminal_render(
-            pixels,
-            bounds,
-            &window,
-            &moving_selection,
-            (ts.0, ts.1 - 1),
-            (0, 1),
-        )?;
-        stdout.flush().context("failed to flush stdout")?;
     }
-    Ok(())
+}
+
+fn ui(f: &mut Frame, app: &App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(f.area());
+
+    let help_text = "Esc to exit - wasd to move selection - Enter to write current image file and z to zoom";
+    let help_paragraph = Paragraph::new(help_text);
+    f.render_widget(help_paragraph, chunks[0]);
+
+    render_mandelbrot(f, app, chunks[1]);
+}
+
+fn render_mandelbrot(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    let (cols, rows) = (area.width, area.height);
+    let buf = f.buffer_mut();
+    let truecolor = has_truecolor();
+
+    // Draw pixels
+    for r in 0..rows {
+        let r_idx = area.y + r;
+        let y_start = r as usize * app.bounds.1 / rows as usize;
+        let y_end = (r + 1) as usize * app.bounds.1 / rows as usize;
+
+        for c in 0..cols {
+            let c_idx = area.x + c;
+            let x_start = c as usize * app.bounds.0 / cols as usize;
+            let x_end = (c + 1) as usize * app.bounds.0 / cols as usize;
+
+            let mut sum: usize = 0;
+            let mut count: usize = 0;
+            for x in x_start..x_end {
+                for y in y_start..y_end {
+                    sum += app.pixels[x + y * app.bounds.0] as usize;
+                    count += 1;
+                }
+            }
+
+            let avg = if count > 0 { (sum / count) as u8 } else { 0 };
+
+            let color = if truecolor {
+                let (r, g, b) = palette(avg);
+                Color::Rgb(r, g, b)
+            } else {
+                let pixel = (avg as usize * 24 / 256) as u8;
+                Color::Indexed(232 + pixel)
+            };
+
+            buf[(c_idx, r_idx)]
+                .set_char('\u{2588}')
+                .set_style(Style::default().fg(color));
+        }
+    }
+
+    // Draw selection
+    let (start_c, start_r) =
+        complex_to_cursor_position(&app.moving_selection.upper_left, &app.window, (cols, rows));
+    let (end_c, end_r) =
+        complex_to_cursor_position(&app.moving_selection.lower_right, &app.window, (cols, rows));
+
+    let selection_style = Style::default().fg(Color::Indexed(20));
+
+    // Top & Bottom
+    for c in start_c..=end_c {
+        if c < cols {
+            buf[(area.x + c, area.y + start_r)]
+                .set_style(selection_style);
+            buf[(area.x + c, area.y + end_r)]
+                .set_style(selection_style);
+        }
+    }
+    // Sides
+    for r in start_r..=end_r {
+        if r < rows {
+            buf[(area.x + start_c, area.y + r)]
+                .set_style(selection_style);
+            buf[(area.x + end_c, area.y + r)]
+                .set_style(selection_style);
+        }
+    }
 }
 
 /// Given a pixel array, bounds and window co-ordinates and number of threads to use
@@ -623,9 +596,9 @@ mod tests {
 
         let terminal_size = (200, 200);
         let (c, r) = complex_to_cursor_position(&selection.upper_left, &window, terminal_size);
-        // (25-0)/100 * 199 = 49.75 -> 50. 50 + 1 = 51.
-        // (100-75)/100 * 199 = 49.75 -> 50. 50 + 1 = 51.
-        assert_eq!((c, r), (51, 51));
+        // (25-0)/100 * 199 = 49.75 -> 50.
+        // (100-75)/100 * 199 = 49.75 -> 50.
+        assert_eq!((c, r), (50, 50));
     }
 
     #[test]
