@@ -92,32 +92,41 @@ impl Rect {
         let complex_x_per_char = (window.lower_right.re - window.upper_left.re).abs() / terminal_size.0 as f64;
         let complex_y_per_char = (window.upper_left.im - window.lower_right.im).abs() / terminal_size.1 as f64;
 
-        let dx = delta_cols as f64 * complex_x_per_char;
-        let dy = delta_rows as f64 * complex_y_per_char;
+        let mut dx = delta_cols as f64 * complex_x_per_char;
+        let mut dy = delta_rows as f64 * complex_y_per_char;
 
-        let mut new_rect = self.clone();
+        let min_re = f64::min(window.upper_left.re, window.lower_right.re);
+        let max_re = f64::max(window.upper_left.re, window.lower_right.re);
+        let min_im = f64::min(window.upper_left.im, window.lower_right.im);
+        let max_im = f64::max(window.upper_left.im, window.lower_right.im);
 
-        // Move and clamp X
-        new_rect.upper_left.re = (self.upper_left.re + dx).clamp(
-            f64::min(window.upper_left.re, window.lower_right.re),
-            f64::max(window.upper_left.re, window.lower_right.re)
-        );
-        new_rect.lower_right.re = (self.lower_right.re + dx).clamp(
-            f64::min(window.upper_left.re, window.lower_right.re),
-            f64::max(window.upper_left.re, window.lower_right.re)
-        );
+        let sel_min_re = f64::min(self.upper_left.re, self.lower_right.re);
+        let sel_max_re = f64::max(self.upper_left.re, self.lower_right.re);
+        let sel_min_im = f64::min(self.upper_left.im, self.lower_right.im);
+        let sel_max_im = f64::max(self.upper_left.im, self.lower_right.im);
 
-        // Move and clamp Y
-        new_rect.upper_left.im = (self.upper_left.im + dy).clamp(
-            f64::min(window.upper_left.im, window.lower_right.im),
-            f64::max(window.upper_left.im, window.lower_right.im)
-        );
-        new_rect.lower_right.im = (self.lower_right.im + dy).clamp(
-            f64::min(window.upper_left.im, window.lower_right.im),
-            f64::max(window.upper_left.im, window.lower_right.im)
-        );
+        if dx > 0.0 {
+            dx = dx.min(max_re - sel_max_re);
+        } else if dx < 0.0 {
+            dx = dx.max(min_re - sel_min_re);
+        }
 
-        new_rect
+        if dy > 0.0 {
+            dy = dy.min(max_im - sel_max_im);
+        } else if dy < 0.0 {
+            dy = dy.max(min_im - sel_min_im);
+        }
+
+        Rect {
+            upper_left: Complex {
+                re: self.upper_left.re + dx,
+                im: self.upper_left.im + dy,
+            },
+            lower_right: Complex {
+                re: self.lower_right.re + dx,
+                im: self.lower_right.im + dy,
+            },
+        }
     }
 }
 
@@ -127,16 +136,27 @@ fn complex_to_cursor_position(
     window: &Rect,
     terminal_bounds: (u16, u16),
 ) -> (u16, u16) {
-    // Calculate how much complex number is represented by one cursor position for rows and columns
-    let complex_x_per_char =
-        num::abs(window.lower_right.re - window.upper_left.re) / terminal_bounds.0 as f64;
-    let complex_y_per_char =
-        num::abs(window.upper_left.im - window.lower_right.im) / terminal_bounds.1 as f64;
+    let (width, height) = terminal_bounds;
 
-    let c: f64 = num::abs(complex.re - window.upper_left.re) / complex_x_per_char;
-    let r: f64 = num::abs(window.lower_right.im - complex.im) / complex_y_per_char;
+    let complex_width = (window.lower_right.re - window.upper_left.re).abs();
+    let complex_height = (window.upper_left.im - window.lower_right.im).abs();
 
-    (c as u16, terminal_bounds.1 - (r as u16))
+    let c = if complex_width > 0.0 {
+        ((complex.re - window.upper_left.re) / complex_width * (width - 1) as f64).round() as i32
+    } else {
+        0
+    };
+
+    let r = if complex_height > 0.0 {
+        ((window.upper_left.im - complex.im) / complex_height * (height - 1) as f64).round() as i32
+    } else {
+        0
+    };
+
+    (
+        (c.clamp(0, width as i32 - 1) + 1) as u16,
+        (r.clamp(0, height as i32 - 1) + 1) as u16,
+    )
 }
 
 /// Draw the pixels of the Mandelbrot set as best we can in the terminal
@@ -186,40 +206,41 @@ fn terminal_render(
 
     // Draw the zoom selection
     let (start_c, start_r) =
-        complex_to_cursor_position(&selection.upper_left, window, terminal_size);
+        complex_to_cursor_position(&selection.upper_left, window, (cols - 1, rows - 1));
 
-    let (end_c, end_r) = complex_to_cursor_position(&selection.lower_right, window, terminal_size);
+    let (end_c, end_r) =
+        complex_to_cursor_position(&selection.lower_right, window, (cols - 1, rows - 1));
 
     let selection_colour = color::AnsiValue::grayscale(20);
 
     // Top and bottom
-    for c in start_c..end_c {
+    for c in start_c..=end_c {
         write!(
             stdout,
             "{}{}\u{2588}",
-            termion::cursor::Goto(c, end_r),
+            termion::cursor::Goto(c + terminal_window_offset.0, start_r + terminal_window_offset.1),
             termion::color::Fg(selection_colour)
         )?;
         write!(
             stdout,
             "{}{}\u{2588}",
-            termion::cursor::Goto(c, start_r),
+            termion::cursor::Goto(c + terminal_window_offset.0, end_r + terminal_window_offset.1),
             termion::color::Fg(selection_colour)
         )?;
     }
 
     // Sides
-    for r in start_r..end_r {
+    for r in start_r..=end_r {
         write!(
             stdout,
             "{}{}\u{2588}",
-            termion::cursor::Goto(start_c, r),
+            termion::cursor::Goto(start_c + terminal_window_offset.0, r + terminal_window_offset.1),
             termion::color::Fg(selection_colour)
         )?;
         write!(
             stdout,
             "{}{}\u{2588}",
-            termion::cursor::Goto(end_c, r),
+            termion::cursor::Goto(end_c + terminal_window_offset.0, r + terminal_window_offset.1),
             termion::color::Fg(selection_colour)
         )?;
     }
@@ -565,8 +586,10 @@ mod tests {
         );
 
         let terminal_size = (200, 200);
-        let (r, c) = complex_to_cursor_position(&selection.upper_left, &window, terminal_size);
-        assert_eq!((r, c), (50, 50));
+        let (c, r) = complex_to_cursor_position(&selection.upper_left, &window, terminal_size);
+        // (25-0)/100 * 199 = 49.75 -> 50. 50 + 1 = 51.
+        // (100-75)/100 * 199 = 49.75 -> 50. 50 + 1 = 51.
+        assert_eq!((c, r), (51, 51));
     }
 
     #[test]
@@ -583,5 +606,68 @@ mod tests {
             increment_numbered_filename(&acc)
         });
         assert_eq!(numbered_20, "/tmp/mandelbrot200.png");
+    }
+
+    #[test]
+    fn test_selection_move_preserves_size() {
+        let window = Rect {
+            upper_left: Complex { re: -2.0, im: 1.0 },
+            lower_right: Complex { re: 1.0, im: -1.0 },
+        };
+
+        let selection = Rect {
+            upper_left: Complex { re: -1.0, im: 0.5 },
+            lower_right: Complex { re: 0.5, im: -0.5 },
+        };
+
+        let terminal_size = (100, 100);
+
+        // Original width and height
+        let original_width = (selection.lower_right.re - selection.upper_left.re).abs();
+        let original_height = (selection.upper_left.im - selection.lower_right.im).abs();
+
+        // Move right towards the edge
+        // complex_x_per_char = 3.0 / 100 = 0.03
+        // To reach the edge (re=1.0) from re=0.5, we need 0.5 / 0.03 = 16.66 chars.
+        // Let's move 20 chars.
+        let moved = selection.move_by(&window, terminal_size, 20, 0);
+
+        let new_width = (moved.lower_right.re - moved.upper_left.re).abs();
+        let new_height = (moved.upper_left.im - moved.lower_right.im).abs();
+
+        assert!(
+            (new_width - original_width).abs() < 1e-10,
+            "Width changed from {} to {}",
+            original_width,
+            new_width
+        );
+        assert!(
+            (new_height - original_height).abs() < 1e-10,
+            "Height changed from {} to {}",
+            original_height,
+            new_height
+        );
+        
+        // Ensure it stopped at the edge
+        assert!(moved.lower_right.re <= 1.0 + 1e-10);
+        assert!(moved.upper_left.re >= -2.0 - 1e-10);
+
+        // Move left towards the edge
+        let moved = selection.move_by(&window, terminal_size, -40, 0);
+        let new_width = (moved.lower_right.re - moved.upper_left.re).abs();
+        assert!((new_width - original_width).abs() < 1e-10);
+        assert!(moved.upper_left.re >= -2.0 - 1e-10);
+
+        // Move up towards the edge
+        let moved = selection.move_by(&window, terminal_size, 0, 20);
+        let new_height = (moved.upper_left.im - moved.lower_right.im).abs();
+        assert!((new_height - original_height).abs() < 1e-10);
+        assert!(moved.upper_left.im <= 1.0 + 1e-10);
+
+        // Move down towards the edge
+        let moved = selection.move_by(&window, terminal_size, 0, -20);
+        let new_height = (moved.upper_left.im - moved.lower_right.im).abs();
+        assert!((new_height - original_height).abs() < 1e-10);
+        assert!(moved.lower_right.im >= -1.0 - 1e-10);
     }
 }
