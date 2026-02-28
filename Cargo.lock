@@ -604,6 +604,7 @@ dependencies = [
 name = "mandelbrot"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "crossbeam",
  "float-cmp",
  "image",

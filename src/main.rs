@@ -1,3 +1,4 @@
+use anyhow::{anyhow, Context, Result};
 use image::ColorType;
 use num::Complex;
 use std::env;
@@ -8,43 +9,75 @@ use termion::event::{Event, Key};
 use termion::input::{MouseTerminal, TermRead};
 use termion::raw::IntoRawMode;
 
-fn main() {
-    let args = env::args().collect::<Vec<String>>();
+struct Config {
+    file_path: String,
+    bounds: (usize, usize),
+    upper_left: Complex<f64>,
+    lower_right: Complex<f64>,
+    num_threads: usize,
+}
 
-    let num_cpus = num_cpus::get();
+fn parse_args() -> Result<Config> {
+    let args: Vec<String> = env::args().collect();
 
     if args.len() < 5 {
-        eprintln!(
-            "Usage: {} FILE PIXELS UPPERLEFT UPPERRIGHT [THREADS]",
+        return Err(anyhow!(
+            "Usage: {} FILE PIXELS UPPERLEFT UPPERRIGHT [THREADS]\n\
+             Example: {} ./images/mandel.png 2560x1440 -1.20,1.0 1.20,-1.0 4",
+            args[0],
             args[0]
-        );
-        eprintln!(
-            "Example: {} ./images/mandel.png 2560x1440 -1.20,1.0 1.20,-1.0 4",
-            args[0]
-        );
-        std::process::exit(1);
+        ));
     }
 
-    let bounds = parse_pair(&args[2], 'x').expect("error parsing image dimensions");
-    let upper_left = parse_complex(&args[3]).expect("error parsing upper left corner point");
-    let lower_right = parse_complex(&args[4]).expect("error parsing lower right corner point");
+    let file_path = args[1].clone();
+    let bounds = parse_pair(&args[2], 'x').context("error parsing image dimensions")?;
+    let upper_left = parse_complex(&args[3]).context("error parsing upper left corner point")?;
+    let lower_right = parse_complex(&args[4]).context("error parsing lower right corner point")?;
 
-    let window = Rect {
+    let num_threads = if args.len() == 6 {
+        args[5].parse().context("error parsing thread count")?
+    } else {
+        num_cpus::get()
+    };
+
+    if num_threads == 0 {
+        return Err(anyhow!("thread count must be greater than zero"));
+    }
+
+    Ok(Config {
+        file_path,
+        bounds,
         upper_left,
         lower_right,
+        num_threads,
+    })
+}
+
+fn main() -> Result<()> {
+    let config = match parse_args() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        }
     };
 
-    let mut pixels = vec![0; bounds.0 * bounds.1];
-
-    // Handle thread input
-    let num_threads: usize = if args.len() == 6 {
-        args[5].parse().unwrap()
-    } else {
-        num_cpus
+    let window = Rect {
+        upper_left: config.upper_left,
+        lower_right: config.lower_right,
     };
 
-    assert!(num_threads > 0);
-    tui_loop(&args[1], num_threads, &mut pixels, bounds, &window);
+    let mut pixels = vec![0; config.bounds.0 * config.bounds.1];
+
+    tui_loop(
+        &config.file_path,
+        config.num_threads,
+        &mut pixels,
+        config.bounds,
+        &window,
+    )?;
+
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -117,22 +150,37 @@ fn terminal_render(
     selection: &Rect,
     terminal_size: (u16, u16),
     terminal_window_offset: (u16, u16),
-) {
+) -> Result<()> {
     let mut stdout = std::io::BufWriter::new(std::io::stdout());
     let (cols, rows) = terminal_size;
 
     // Draw the pixels
     for c in 1..cols {
+        let x_start = (c - 1) as usize * bounds.0 / cols as usize;
+        let x_end = c as usize * bounds.0 / cols as usize;
+
         for r in 1..rows {
-            let pixel = pixel_to_char_grayscale((c, r), (cols, rows), pixels, bounds);
+            let y_start = (r - 1) as usize * bounds.1 / rows as usize;
+            let y_end = r as usize * bounds.1 / rows as usize;
+
+            let mut sum: usize = 0;
+            let mut count: usize = 0;
+            for x in x_start..x_end {
+                for y in y_start..y_end {
+                    sum += pixels[x + y * bounds.0] as usize;
+                    count += 1;
+                }
+            }
+
+            let avg = if count > 0 { sum / count } else { 0 };
+            let pixel = (avg * 24 / 256) as u8;
 
             write!(
                 stdout,
                 "{}{}\u{2588}",
                 termion::cursor::Goto(c + terminal_window_offset.0, r + terminal_window_offset.1),
                 termion::color::Fg(termion::color::AnsiValue::grayscale(pixel))
-            )
-            .unwrap();
+            )?;
         }
     }
 
@@ -151,15 +199,13 @@ fn terminal_render(
             "{}{}\u{2588}",
             termion::cursor::Goto(c, end_r),
             termion::color::Fg(selection_colour)
-        )
-        .unwrap();
+        )?;
         write!(
             stdout,
             "{}{}\u{2588}",
             termion::cursor::Goto(c, start_r),
             termion::color::Fg(selection_colour)
-        )
-        .unwrap();
+        )?;
     }
 
     // Sides
@@ -169,17 +215,16 @@ fn terminal_render(
             "{}{}\u{2588}",
             termion::cursor::Goto(start_c, r),
             termion::color::Fg(selection_colour)
-        )
-        .unwrap();
+        )?;
         write!(
             stdout,
             "{}{}\u{2588}",
             termion::cursor::Goto(end_c, r),
             termion::color::Fg(selection_colour)
-        )
-        .unwrap();
+        )?;
     }
-    stdout.flush().unwrap();
+    stdout.flush()?;
+    Ok(())
 }
 
 fn selection_from_window(window: &Rect, _zoom: f64) -> Rect {
@@ -201,17 +246,23 @@ fn selection_from_window(window: &Rect, _zoom: f64) -> Rect {
 /// Event loop and renderer
 /// This enables the user to write the image, move and zoom the selection window 
 /// and so on.
-fn tui_loop(file_path: &str,
-            num_threads: usize,
-            pixels: &mut [u8], 
-            bounds: (usize, usize), 
-            initial_window: &Rect) {
+fn tui_loop(
+    file_path: &str,
+    num_threads: usize,
+    pixels: &mut [u8],
+    bounds: (usize, usize),
+    initial_window: &Rect,
+) -> Result<()> {
     let mut numbered_file_path = increment_numbered_filename(file_path);
     let zoom = 0.5f64;
     let stdin = stdin();
-    let mut stdout = MouseTerminal::from(stdout().into_raw_mode().unwrap());
+    let mut stdout = MouseTerminal::from(
+        stdout()
+            .into_raw_mode()
+            .context("failed to set raw mode")?,
+    );
 
-    let mut ts = termion::terminal_size().unwrap();
+    let mut ts = termion::terminal_size().context("failed to get terminal size")?;
     let mut window = initial_window.clone();
 
     let selection = selection_from_window(&window, zoom);
@@ -227,10 +278,16 @@ fn tui_loop(file_path: &str,
         termion::clear::All,
         termion::cursor::Goto(1, 1)
     )
-    .unwrap();
+    .context("failed to write to stdout")?;
 
     // Render the image to the pizel array
-    parallel_render(pixels, bounds, window.upper_left, window.lower_right, num_threads);
+    parallel_render(
+        pixels,
+        bounds,
+        window.upper_left,
+        window.lower_right,
+        num_threads,
+    );
     terminal_render(
         pixels,
         bounds,
@@ -238,64 +295,53 @@ fn tui_loop(file_path: &str,
         &selection,
         (ts.0, ts.1 - 1),
         (0, 1),
-    );
-    stdout.flush().unwrap();
+    )?;
+    stdout.flush().context("failed to flush stdout")?;
 
     let mut moving_selection = selection.clone();
 
     let terminal_bounds = (ts.0, ts.1 - 1);
 
     for c in stdin.events() {
-        let evt = c.unwrap();
-        if let Event::Key(key) = evt { match key {
-            Key::Esc => {
-                println!("{}", termion::clear::All);
-                break;
-            }
-            Key::Char('a') => {
-                moving_selection = moving_selection.move_by(
-                    &window,
-                    terminal_bounds,
-                    -1,
-                    0,
-                );
-            }
-            Key::Char('d') => {
-                moving_selection = moving_selection.move_by(
-                    &window,
-                    terminal_bounds,
-                    1,
-                    0,
-                );
-            }
-            Key::Char('w') => {
-                moving_selection = moving_selection.move_by(
-                    &window,
-                    terminal_bounds,
-                    0,
-                    1,
-                );
-            }
-            Key::Char('s') => {
-                moving_selection = moving_selection.move_by(
-                    &window,
-                    terminal_bounds,
-                    0,
-                    -1,
-                );
-            }
+        let evt = c.context("failed to read event")?;
+        if let Event::Key(key) = evt {
+            match key {
+                Key::Esc => {
+                    write!(stdout, "{}", termion::clear::All).context("failed to clear screen")?;
+                    break;
+                }
+                Key::Char('a') => {
+                    moving_selection = moving_selection.move_by(&window, terminal_bounds, -1, 0);
+                }
+                Key::Char('d') => {
+                    moving_selection = moving_selection.move_by(&window, terminal_bounds, 1, 0);
+                }
+                Key::Char('w') => {
+                    moving_selection = moving_selection.move_by(&window, terminal_bounds, 0, 1);
+                }
+                Key::Char('s') => {
+                    moving_selection = moving_selection.move_by(&window, terminal_bounds, 0, -1);
+                }
 
-            Key::Char('\n') => {
-                 write_image(&numbered_file_path, pixels, bounds).expect("error writing PNG file");
-                 numbered_file_path = increment_numbered_filename(&numbered_file_path);
+                Key::Char('\n') => {
+                    write_image(&numbered_file_path, pixels, bounds)
+                        .context("error writing PNG file")?;
+                    numbered_file_path = increment_numbered_filename(&numbered_file_path);
+                }
+                Key::Char('z') => {
+                    window.clone_from(&moving_selection);
+                    moving_selection = selection_from_window(&window, zoom);
+                    parallel_render(
+                        pixels,
+                        bounds,
+                        window.upper_left,
+                        window.lower_right,
+                        num_threads,
+                    );
+                }
+                _ => {}
             }
-            Key::Char('z') => {
-                window.clone_from(&moving_selection);
-                moving_selection = selection_from_window(&window, zoom);
-                parallel_render(pixels, bounds, window.upper_left, window.lower_right, num_threads);
-            }
-            _ => {}
-        } }
+        }
         terminal_render(
             pixels,
             bounds,
@@ -303,9 +349,10 @@ fn tui_loop(file_path: &str,
             &moving_selection,
             (ts.0, ts.1 - 1),
             (0, 1),
-        );
-        stdout.flush().unwrap();
+        )?;
+        stdout.flush().context("failed to flush stdout")?;
     }
+    Ok(())
 }
 
 /// Given a pixel array, bounds and window co-ordinates and number of threads to use
@@ -359,40 +406,6 @@ fn escape_time(c: Complex<f64>, limit: usize) -> Option<usize> {
 // eg 1000 pixels to 100 chars
 // pixels per char = pixel w / char w ... round down
 
-/// Given a rendered Mandelbrot image of the size bounds calculate the value of the terminal
-/// representation. Given the terminal width and height and a character position, you must find
-/// the average brightness of the pixels that character represents. Note that there are 24
-/// gray scales. char_pos is 1 based
-fn pixel_to_char_grayscale(
-    char_pos: (u16, u16),
-    terminal_bounds: (u16, u16),
-    pixels: &[u8],
-    bounds: (usize, usize),
-) -> u8 {
-    let horizontal_pixels_per_char = bounds.0 as f32 / terminal_bounds.0 as f32;
-    let vertical_pixels_per_char = bounds.1 as f32 / terminal_bounds.1 as f32;
-
-    let leftmost_pixel = (char_pos.0 - 1) as f32 * horizontal_pixels_per_char;
-    let topmost_pixel = (char_pos.1 - 1) as f32 * vertical_pixels_per_char;
-
-    let rightmost_pixel = (leftmost_pixel + horizontal_pixels_per_char) as usize;
-    let bottommost_pixel = (topmost_pixel + vertical_pixels_per_char) as usize;
-
-    let mut sum: usize = 0;
-    let mut count: usize = 0;
-    for x in leftmost_pixel as usize..rightmost_pixel {
-        for y in topmost_pixel as usize..bottommost_pixel {
-            sum += pixels[x + y * bounds.0] as usize;
-            count += 1;
-        }
-    }
-
-    let avg = sum as f32 / count as f32;
-    let gray_scale: f32 = 24.0 / 256.0;
-    
-    (avg * gray_scale) as u8
-}
-
 /// Calculate the Complex number that represents the pixel within an image of the defined bounds
 fn pixel_to_point(
     bounds: (usize, usize),
@@ -445,11 +458,7 @@ fn parse_complex(s: &str) -> Option<Complex<f64>> {
     parsed.map(|(re, im)| Complex::new(re, im))
 }
 
-fn write_image(
-    filename: &str,
-    pixels: &[u8],
-    bounds: (usize, usize),
-) -> Result<(), std::io::Error> {
+fn write_image(filename: &str, pixels: &[u8], bounds: (usize, usize)) -> Result<()> {
     image::save_buffer(
         filename,
         pixels,
@@ -457,39 +466,32 @@ fn write_image(
         bounds.1 as u32,
         ColorType::L8,
     )
-    .map_err(std::io::Error::other)
+    .context("failed to save image")?;
+    Ok(())
 }
 
 fn increment_numbered_filename(file_path: &str) -> String {
-    let last_dot = file_path.find('.');
+    let path = std::path::Path::new(file_path);
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
 
-    match last_dot {
-        None => file_path.to_string(),
-        Some(last_dot_index) => {
-            let first_non_numeric = file_path[..last_dot_index].rfind(|s: char| !s.is_numeric());
-            match first_non_numeric {
-                None => file_path.to_string(),
-                Some(first_non_numeric_index) => {
-                    if first_non_numeric_index == last_dot_index - 1 {
-                        format!(
-                            "{}1{}",
-                            &file_path[..first_non_numeric_index + 1],
-                            &file_path[last_dot_index..]
-                        )
-                    } else {
-                        let num_str = &file_path[first_non_numeric_index + 1..last_dot_index];
-                        let num: u64 = num_str.parse::<u64>().unwrap() + 1;
-                        format!(
-                            "{}{}{}",
-                            &file_path[..first_non_numeric_index + 1],
-                            num,
-                            &file_path[last_dot_index..]
-                        )
-                    }
-                }
-            }
-        }
+    let first_non_numeric = stem.rfind(|c: char| !c.is_numeric());
+
+    let (prefix, num_str) = match first_non_numeric {
+        Some(idx) => stem.split_at(idx + 1),
+        None => ("", stem),
+    };
+
+    let next_num = num_str.parse::<u64>().map(|n| n + 1).unwrap_or(1);
+    let next_stem = format!("{}{}", prefix, next_num);
+
+    let mut next_path = path.to_path_buf();
+    next_path.set_file_name(next_stem);
+    if !extension.is_empty() {
+        next_path.set_extension(extension);
     }
+
+    next_path.to_str().unwrap_or(file_path).to_string()
 }
 
 #[test]
