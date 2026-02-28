@@ -294,6 +294,7 @@ fn ui(f: &mut Frame, app: &App) {
 fn render_mandelbrot(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let (cols, rows) = (area.width, area.height);
     let buf = f.buffer_mut();
+    let truecolor = has_truecolor();
 
     // Draw pixels
     for r in 0..rows {
@@ -316,11 +317,18 @@ fn render_mandelbrot(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             }
 
             let avg = if count > 0 { (sum / count) as u8 } else { 0 };
-            let (r, g, b) = palette(avg);
+
+            let color = if truecolor {
+                let (r, g, b) = palette(avg);
+                Color::Rgb(r, g, b)
+            } else {
+                let pixel = (avg as usize * 24 / 256) as u8;
+                Color::Indexed(232 + pixel)
+            };
 
             buf[(c_idx, r_idx)]
                 .set_char('\u{2588}')
-                .set_style(Style::default().fg(Color::Rgb(r, g, b)));
+                .set_style(Style::default().fg(color));
         }
     }
 
