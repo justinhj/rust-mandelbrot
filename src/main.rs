@@ -53,128 +53,38 @@ struct Rect {
     lower_right: Complex<f64>,
 }
 
-// The following four functions to move the selection window around 
-// are incredibly lame and need to be refactored.
+impl Rect {
+    /// Move the rectangle by a number of characters within a bounding window
+    fn move_by(&self, window: &Rect, terminal_size: (u16, u16), delta_cols: i32, delta_rows: i32) -> Rect {
+        let complex_x_per_char = (window.lower_right.re - window.upper_left.re).abs() / terminal_size.0 as f64;
+        let complex_y_per_char = (window.upper_left.im - window.lower_right.im).abs() / terminal_size.1 as f64;
 
-// Given a selection within a larger window and the cursor bounds
-// return a new selection moved to the left the set number of cursor
-// positions.
-fn move_selection_left(
-    selection: &Rect,
-    window: &Rect,
-    terminal_bounds: (u16, u16),
-    count: u16,
-) -> Rect {
-    let complex_x_per_char =
-        num::abs(window.lower_right.re - window.upper_left.re) / terminal_bounds.0 as f64;
+        let dx = delta_cols as f64 * complex_x_per_char;
+        let dy = delta_rows as f64 * complex_y_per_char;
 
-    let upper_left_re = f64::max(
-        selection.upper_left.re - (count as f64 * complex_x_per_char),
-        window.upper_left.re,
-    );
-    let lower_right_re = f64::max(
-        selection.lower_right.re - (count as f64 * complex_x_per_char),
-        window.upper_left.re,
-    );
+        let mut new_rect = self.clone();
 
-    Rect {
-        upper_left: Complex {
-            re: upper_left_re,
-            im: selection.upper_left.im,
-        },
-        lower_right: Complex {
-            re: lower_right_re,
-            im: selection.lower_right.im,
-        },
-    }
-}
+        // Move and clamp X
+        new_rect.upper_left.re = (self.upper_left.re + dx).clamp(
+            f64::min(window.upper_left.re, window.lower_right.re),
+            f64::max(window.upper_left.re, window.lower_right.re)
+        );
+        new_rect.lower_right.re = (self.lower_right.re + dx).clamp(
+            f64::min(window.upper_left.re, window.lower_right.re),
+            f64::max(window.upper_left.re, window.lower_right.re)
+        );
 
-fn move_selection_right(
-    selection: &Rect,
-    window: &Rect,
-    terminal_bounds: (u16, u16),
-    count: u16,
-) -> Rect {
-    let complex_x_per_char =
-        num::abs(window.lower_right.re - window.upper_left.re) / terminal_bounds.0 as f64;
-    let upper_left_re = f64::min(
-        selection.upper_left.re + (count as f64 * complex_x_per_char),
-        window.lower_right.re,
-    );
-    let lower_right_re = f64::min(
-        selection.lower_right.re + (count as f64 * complex_x_per_char),
-        window.lower_right.re,
-    );
+        // Move and clamp Y
+        new_rect.upper_left.im = (self.upper_left.im + dy).clamp(
+            f64::min(window.upper_left.im, window.lower_right.im),
+            f64::max(window.upper_left.im, window.lower_right.im)
+        );
+        new_rect.lower_right.im = (self.lower_right.im + dy).clamp(
+            f64::min(window.upper_left.im, window.lower_right.im),
+            f64::max(window.upper_left.im, window.lower_right.im)
+        );
 
-    Rect {
-        upper_left: Complex {
-            re: upper_left_re,
-            im: selection.upper_left.im,
-        },
-        lower_right: Complex {
-            re: lower_right_re,
-            im: selection.lower_right.im,
-        },
-    }
-}
-
-fn move_selection_down(
-    selection: &Rect,
-    window: &Rect,
-    terminal_bounds: (u16, u16),
-    count: u16,
-) -> Rect {
-    let complex_y_per_char =
-        num::abs(window.upper_left.im - window.lower_right.im) / terminal_bounds.1 as f64;
-
-    let upper_left_im = f64::min(
-        selection.upper_left.im - (count as f64 * complex_y_per_char),
-        window.upper_left.im,
-    );
-    let lower_right_im = f64::min(
-        selection.lower_right.im - (count as f64 * complex_y_per_char),
-        window.upper_left.im,
-    );
-
-    Rect {
-        upper_left: Complex {
-            re: selection.upper_left.re,
-            im: upper_left_im,
-        },
-        lower_right: Complex {
-            re: selection.lower_right.re,
-            im: lower_right_im,
-        },
-    }
-}
-
-fn move_selection_up(
-    selection: &Rect,
-    window: &Rect,
-    terminal_bounds: (u16, u16),
-    count: u16,
-) -> Rect {
-    let complex_y_per_char =
-        num::abs(window.upper_left.im - window.lower_right.im) / terminal_bounds.1 as f64;
-
-    let upper_left_im = f64::max(
-        selection.upper_left.im + (count as f64 * complex_y_per_char),
-        window.lower_right.im,
-    );
-    let lower_right_im = f64::max(
-        selection.lower_right.im + (count as f64 * complex_y_per_char),
-        window.lower_right.im,
-    );
-
-    Rect {
-        upper_left: Complex {
-            re: selection.upper_left.re,
-            im: upper_left_im,
-        },
-        lower_right: Complex {
-            re: selection.lower_right.re,
-            im: lower_right_im,
-        },
+        new_rect
     }
 }
 
@@ -343,37 +253,38 @@ fn tui_loop(file_path: &str,
                 break;
             }
             Key::Char('a') => {
-                moving_selection = move_selection_left(
-                    &moving_selection,
+                moving_selection = moving_selection.move_by(
                     &window,
                     terminal_bounds,
-                    1,
+                    -1,
+                    0,
                 );
             }
             Key::Char('d') => {
-                moving_selection = move_selection_right(
-                    &moving_selection,
+                moving_selection = moving_selection.move_by(
                     &window,
                     terminal_bounds,
                     1,
+                    0,
                 );
             }
             Key::Char('w') => {
-                moving_selection = move_selection_up(
-                    &moving_selection,
+                moving_selection = moving_selection.move_by(
                     &window,
                     terminal_bounds,
+                    0,
                     1,
                 );
             }
             Key::Char('s') => {
-                moving_selection = move_selection_down(
-                    &moving_selection,
+                moving_selection = moving_selection.move_by(
                     &window,
                     terminal_bounds,
-                    1,
+                    0,
+                    -1,
                 );
             }
+
             Key::Char('\n') => {
                  write_image(&numbered_file_path, pixels, bounds).expect("error writing PNG file");
                  numbered_file_path = increment_numbered_filename(&numbered_file_path);
