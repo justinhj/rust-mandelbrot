@@ -1,8 +1,6 @@
-use image::png::PNGEncoder;
 use image::ColorType;
 use num::Complex;
 use std::env;
-use std::fs::File;
 use std::io::{stdin, stdout, Write};
 use std::str::FromStr;
 use termion::color;
@@ -203,7 +201,7 @@ fn complex_to_cursor_position(
 /// Window is the complex coordinates of the window into the Mandelbrot set
 /// Selection is the current user selection for the next zoom
 fn terminal_render(
-    pixels: &Vec<u8>,
+    pixels: &[u8],
     bounds: (usize, usize),
     window: &Rect,
     selection: &Rect,
@@ -266,7 +264,7 @@ fn selection_from_window(window: &Rect, _zoom: f64) -> Rect {
     // TODO use zoom
     let quarter_width = num::abs(window.lower_right.re - window.upper_left.re) / 4.0;
     let quarter_height = num::abs(window.upper_left.im - window.lower_right.im) / 4.0;
-    return Rect {
+    Rect {
         upper_left: Complex {
             re: window.upper_left.re + quarter_width,
             im: window.upper_left.im - quarter_height,
@@ -275,7 +273,7 @@ fn selection_from_window(window: &Rect, _zoom: f64) -> Rect {
             re: window.lower_right.re - quarter_width,
             im: window.lower_right.im + quarter_height,
         },
-    };
+    }
 }
 
 /// Event loop and renderer
@@ -283,7 +281,7 @@ fn selection_from_window(window: &Rect, _zoom: f64) -> Rect {
 /// and so on.
 fn tui_loop(file_path: &str,
             num_threads: usize,
-            pixels: &mut Vec<u8>, 
+            pixels: &mut [u8], 
             bounds: (usize, usize), 
             initial_window: &Rect) {
     let mut numbered_file_path = increment_numbered_filename(file_path);
@@ -312,7 +310,7 @@ fn tui_loop(file_path: &str,
     // Render the image to the pizel array
     parallel_render(pixels, bounds, window.upper_left, window.lower_right, num_threads);
     terminal_render(
-        &pixels,
+        pixels,
         bounds,
         &window,
         &selection,
@@ -327,59 +325,56 @@ fn tui_loop(file_path: &str,
 
     for c in stdin.events() {
         let evt = c.unwrap();
-        match evt {
-            Event::Key(key) => match key {
-                Key::Esc => {
-                    println!("{}", termion::clear::All);
-                    break;
-                }
-                Key::Char('a') => {
-                    moving_selection = move_selection_left(
-                        &moving_selection,
-                        &window,
-                        terminal_bounds,
-                        1,
-                    );
-                }
-                Key::Char('d') => {
-                    moving_selection = move_selection_right(
-                        &moving_selection,
-                        &window,
-                        terminal_bounds,
-                        1,
-                    );
-                }
-                Key::Char('w') => {
-                    moving_selection = move_selection_up(
-                        &moving_selection,
-                        &window,
-                        terminal_bounds,
-                        1,
-                    );
-                }
-                Key::Char('s') => {
-                    moving_selection = move_selection_down(
-                        &moving_selection,
-                        &window,
-                        terminal_bounds,
-                        1,
-                    );
-                }
-                Key::Char('\n') => {
-                     write_image(&numbered_file_path, &pixels, bounds).expect("error writing PNG file");
-                     numbered_file_path = increment_numbered_filename(&numbered_file_path);
-                }
-                Key::Char('z') => {
-                    window.clone_from(&moving_selection);
-                    moving_selection = selection_from_window(&window, zoom);
-                    parallel_render(pixels, bounds, window.upper_left, window.lower_right, num_threads);
-                }
-                _ => {}
-            },
+        if let Event::Key(key) = evt { match key {
+            Key::Esc => {
+                println!("{}", termion::clear::All);
+                break;
+            }
+            Key::Char('a') => {
+                moving_selection = move_selection_left(
+                    &moving_selection,
+                    &window,
+                    terminal_bounds,
+                    1,
+                );
+            }
+            Key::Char('d') => {
+                moving_selection = move_selection_right(
+                    &moving_selection,
+                    &window,
+                    terminal_bounds,
+                    1,
+                );
+            }
+            Key::Char('w') => {
+                moving_selection = move_selection_up(
+                    &moving_selection,
+                    &window,
+                    terminal_bounds,
+                    1,
+                );
+            }
+            Key::Char('s') => {
+                moving_selection = move_selection_down(
+                    &moving_selection,
+                    &window,
+                    terminal_bounds,
+                    1,
+                );
+            }
+            Key::Char('\n') => {
+                 write_image(&numbered_file_path, pixels, bounds).expect("error writing PNG file");
+                 numbered_file_path = increment_numbered_filename(&numbered_file_path);
+            }
+            Key::Char('z') => {
+                window.clone_from(&moving_selection);
+                moving_selection = selection_from_window(&window, zoom);
+                parallel_render(pixels, bounds, window.upper_left, window.lower_right, num_threads);
+            }
             _ => {}
-        }
+        } }
         terminal_render(
-            &pixels,
+            pixels,
             bounds,
             &window,
             &moving_selection,
@@ -393,7 +388,7 @@ fn tui_loop(file_path: &str,
 /// Given a pixel array, bounds and window co-ordinates and number of threads to use
 /// render to the pixel array
 fn parallel_render(
-    pixels: &mut Vec<u8>,
+    pixels: &mut [u8],
     bounds: (usize, usize),
     upper_left: Complex<f64>,
     lower_right: Complex<f64>,
@@ -448,7 +443,7 @@ fn escape_time(c: Complex<f64>, limit: usize) -> Option<usize> {
 fn pixel_to_char_grayscale(
     char_pos: (u16, u16),
     terminal_bounds: (u16, u16),
-    pixels: &Vec<u8>,
+    pixels: &[u8],
     bounds: (usize, usize),
 ) -> u8 {
     let horizontal_pixels_per_char = bounds.0 as f32 / terminal_bounds.0 as f32;
@@ -471,8 +466,8 @@ fn pixel_to_char_grayscale(
 
     let avg = sum as f32 / count as f32;
     let gray_scale: f32 = 24.0 / 256.0;
-    let ret = (avg * gray_scale) as u8;
-    return ret;
+    
+    (avg * gray_scale) as u8
 }
 
 /// Calculate the Complex number that represents the pixel within an image of the defined bounds
@@ -532,10 +527,14 @@ fn write_image(
     pixels: &[u8],
     bounds: (usize, usize),
 ) -> Result<(), std::io::Error> {
-    let output = File::create(filename)?;
-    let encoder = PNGEncoder::new(output);
-    encoder.encode(pixels, bounds.0 as u32, bounds.1 as u32, ColorType::Gray(8))?;
-    Ok(())
+    image::save_buffer(
+        filename,
+        pixels,
+        bounds.0 as u32,
+        bounds.1 as u32,
+        ColorType::L8,
+    )
+    .map_err(std::io::Error::other)
 }
 
 fn increment_numbered_filename(file_path: &str) -> String {
@@ -551,17 +550,17 @@ fn increment_numbered_filename(file_path: &str) -> String {
                     if first_non_numeric_index == last_dot_index - 1 {
                         format!(
                             "{}1{}",
-                            file_path[..first_non_numeric_index + 1].to_string(),
-                            file_path[last_dot_index..].to_string()
+                            &file_path[..first_non_numeric_index + 1],
+                            &file_path[last_dot_index..]
                         )
                     } else {
                         let num_str = &file_path[first_non_numeric_index + 1..last_dot_index];
                         let num: u64 = num_str.parse::<u64>().unwrap() + 1;
                         format!(
                             "{}{}{}",
-                            file_path[..first_non_numeric_index + 1].to_string(),
+                            &file_path[..first_non_numeric_index + 1],
                             num,
-                            file_path[last_dot_index..].to_string()
+                            &file_path[last_dot_index..]
                         )
                     }
                 }
