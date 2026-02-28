@@ -296,39 +296,52 @@ fn render_mandelbrot(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let buf = f.buffer_mut();
     let truecolor = has_truecolor();
 
-    // Draw pixels
+    // Draw pixels using half-blocks for double vertical resolution
     for r in 0..rows {
         let r_idx = area.y + r;
-        let y_start = r as usize * app.bounds.1 / rows as usize;
-        let y_end = (r + 1) as usize * app.bounds.1 / rows as usize;
+        // Sample two vertical rows for each terminal row
+        let y_top_start = (r * 2) as usize * app.bounds.1 / (rows * 2) as usize;
+        let y_top_end = (r * 2 + 1) as usize * app.bounds.1 / (rows * 2) as usize;
+        let y_bottom_start = (r * 2 + 1) as usize * app.bounds.1 / (rows * 2) as usize;
+        let y_bottom_end = (r * 2 + 2) as usize * app.bounds.1 / (rows * 2) as usize;
 
         for c in 0..cols {
             let c_idx = area.x + c;
             let x_start = c as usize * app.bounds.0 / cols as usize;
             let x_end = (c + 1) as usize * app.bounds.0 / cols as usize;
 
-            let mut sum: usize = 0;
-            let mut count: usize = 0;
-            for x in x_start..x_end {
-                for y in y_start..y_end {
-                    sum += app.pixels[x + y * app.bounds.0] as usize;
-                    count += 1;
+            // Helper to get average pixel value for a region
+            let get_avg = |x_s, x_e, y_s, y_e| {
+                let mut sum: usize = 0;
+                let mut count: usize = 0;
+                for x in x_s..x_e {
+                    for y in y_s..y_e {
+                        sum += app.pixels[x + y * app.bounds.0] as usize;
+                        count += 1;
+                    }
                 }
-            }
-
-            let avg = if count > 0 { (sum / count) as u8 } else { 0 };
-
-            let color = if truecolor {
-                let (r, g, b) = palette(avg);
-                Color::Rgb(r, g, b)
-            } else {
-                let pixel = (avg as usize * 24 / 256) as u8;
-                Color::Indexed(232 + pixel)
+                if count > 0 { (sum / count) as u8 } else { 0 }
             };
 
+            let avg_top = get_avg(x_start, x_end, y_top_start, y_top_end);
+            let avg_bottom = get_avg(x_start, x_end, y_bottom_start, y_bottom_end);
+
+            let get_color = |avg| {
+                if truecolor {
+                    let (r, g, b) = palette(avg);
+                    Color::Rgb(r, g, b)
+                } else {
+                    let pixel = (avg as usize * 24 / 256) as u8;
+                    Color::Indexed(232 + pixel)
+                }
+            };
+
+            let fg_color = get_color(avg_top);
+            let bg_color = get_color(avg_bottom);
+
             buf[(c_idx, r_idx)]
-                .set_char('\u{2588}')
-                .set_style(Style::default().fg(color));
+                .set_char('\u{2580}') // Upper half block
+                .set_style(Style::default().fg(fg_color).bg(bg_color));
         }
     }
 
@@ -338,14 +351,16 @@ fn render_mandelbrot(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let (end_c, end_r) =
         complex_to_cursor_position(&app.moving_selection.lower_right, &app.window, (cols, rows));
 
-    let selection_style = Style::default().fg(Color::Indexed(20));
+    let selection_style = Style::default().fg(Color::Indexed(20)).bg(Color::Indexed(20));
 
     // Top & Bottom
     for c in start_c..=end_c {
         if c < cols {
             buf[(area.x + c, area.y + start_r)]
+                .set_char('\u{2588}')
                 .set_style(selection_style);
             buf[(area.x + c, area.y + end_r)]
+                .set_char('\u{2588}')
                 .set_style(selection_style);
         }
     }
@@ -353,8 +368,10 @@ fn render_mandelbrot(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     for r in start_r..=end_r {
         if r < rows {
             buf[(area.x + start_c, area.y + r)]
+                .set_char('\u{2588}')
                 .set_style(selection_style);
             buf[(area.x + end_c, area.y + r)]
+                .set_char('\u{2588}')
                 .set_style(selection_style);
         }
     }
