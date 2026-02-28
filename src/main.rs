@@ -208,6 +208,7 @@ fn terminal_render(
     terminal_size: (u16, u16),
     terminal_window_offset: (u16, u16),
 ) {
+    let mut stdout = std::io::BufWriter::new(std::io::stdout());
     let (cols, rows) = terminal_size;
 
     // Draw the pixels
@@ -215,11 +216,13 @@ fn terminal_render(
         for r in 1..rows {
             let pixel = pixel_to_char_grayscale((c, r), (cols, rows), pixels, bounds);
 
-            println!(
+            write!(
+                stdout,
                 "{}{}\u{2588}",
                 termion::cursor::Goto(c + terminal_window_offset.0, r + terminal_window_offset.1),
                 termion::color::Fg(termion::color::AnsiValue::grayscale(pixel))
-            );
+            )
+            .unwrap();
         }
     }
 
@@ -233,31 +236,40 @@ fn terminal_render(
 
     // Top and bottom
     for c in start_c..end_c {
-        println!(
+        write!(
+            stdout,
             "{}{}\u{2588}",
             termion::cursor::Goto(c, end_r),
             termion::color::Fg(selection_colour)
-        );
-        println!(
+        )
+        .unwrap();
+        write!(
+            stdout,
             "{}{}\u{2588}",
             termion::cursor::Goto(c, start_r),
             termion::color::Fg(selection_colour)
-        );
+        )
+        .unwrap();
     }
 
     // Sides
     for r in start_r..end_r {
-        println!(
+        write!(
+            stdout,
             "{}{}\u{2588}",
             termion::cursor::Goto(start_c, r),
             termion::color::Fg(selection_colour)
-        );
-        println!(
+        )
+        .unwrap();
+        write!(
+            stdout,
             "{}{}\u{2588}",
             termion::cursor::Goto(end_c, r),
             termion::color::Fg(selection_colour)
-        );
+        )
+        .unwrap();
     }
+    stdout.flush().unwrap();
 }
 
 fn selection_from_window(window: &Rect, _zoom: f64) -> Rect {
